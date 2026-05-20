@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+tmp/
+scratch/
+uploads/
+*.md
+.air.toml
+bts.jsonc
+.git
+.gitignore

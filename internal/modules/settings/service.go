@@ -1,0 +1,110 @@
+package settings
+
+import (
+	"errors"
+	"strings"
+
+	"gorm.io/gorm"
+
+	"my-app/internal/database"
+	"my-app/internal/models"
+	"my-app/internal/modules/appointments"
+	"my-app/internal/modules/availability"
+	"my-app/internal/modules/exams"
+	"my-app/internal/modules/forms"
+	"my-app/internal/modules/leads"
+	"my-app/internal/modules/subjects"
+)
+
+const singletonID uint = 1
+
+type Service struct {
+	db *gorm.DB
+}
+
+type UpdateOrganizationInput struct {
+	Name         string `json:"name"`
+	SupportEmail string `json:"support_email"`
+	Address      string `json:"address"`
+}
+
+func NewService() *Service {
+	return &Service{db: database.GetDB()}
+}
+
+func (s *Service) GetOrganization() (*OrganizationSettings, error) {
+	var row OrganizationSettings
+	err := s.db.First(&row, singletonID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		row = OrganizationSettings{
+			ID:   singletonID,
+			Name: "Polygraph Forensic Labs",
+		}
+		if createErr := s.db.Create(&row).Error; createErr != nil {
+			return nil, createErr
+		}
+		return &row, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*OrganizationSettings, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return nil, errors.New("organization name is required")
+	}
+
+	row, err := s.GetOrganization()
+	if err != nil {
+		return nil, err
+	}
+
+	updates := map[string]interface{}{
+		"name":          name,
+		"support_email": strings.TrimSpace(input.SupportEmail),
+		"address":       strings.TrimSpace(input.Address),
+	}
+	if err := s.db.Model(row).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	return s.GetOrganization()
+}
+
+func (s *Service) DeleteOrganizationData() error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		tables := []interface{}{
+			&forms.FormRequest{},
+			&appointments.SubjectDocument{},
+			&appointments.ClientDocument{},
+			&exams.Document{},
+			&exams.ExamReport{},
+			&exams.ExamQuestion{},
+			&exams.ExamPhase{},
+			&exams.ClinicalAssessment{},
+			&exams.CaseReferral{},
+			&exams.Exam{},
+			&appointments.Quotation{},
+			&appointments.Appointment{},
+			&subjects.Subject{},
+			&appointments.Client{},
+			&leads.Lead{},
+			&availability.Block{},
+			&models.AuditLog{},
+		}
+		for _, table := range tables {
+			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(table).Error; err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&forms.FormTemplate{}).Error; err != nil {
+			return err
+		}
+		forms.SeedTemplates(tx)
+
+		return tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&OrganizationSettings{}).Error
+	})
+}

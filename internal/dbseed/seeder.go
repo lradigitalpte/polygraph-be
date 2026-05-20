@@ -1,0 +1,105 @@
+package dbseed
+
+import (
+	"my-app/internal/modules/exams"
+	"my-app/internal/modules/rbac"
+
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+)
+
+// SeedDatabase populates the database with initial permissions and roles
+func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
+	// 1. Define Permissions
+	perms := []rbac.Permission{
+		// User Management
+		{Name: "user:view", Description: "Can view user list", Group: "Users"},
+		{Name: "user:create", Description: "Can create new users", Group: "Users"},
+		{Name: "user:edit", Description: "Can edit existing users", Group: "Users"},
+		{Name: "user:delete", Description: "Can delete users", Group: "Users"},
+
+		// Role Management
+		{Name: "role:manage", Description: "Can create and manage roles/permissions", Group: "Roles"},
+
+		// Subject Management
+		{Name: "subject:view", Description: "Can view examinees", Group: "Subjects"},
+		{Name: "subject:create", Description: "Can register new examinees", Group: "Subjects"},
+		{Name: "subject:edit", Description: "Can edit examinee profiles", Group: "Subjects"},
+
+		// Client Management
+		{Name: "client:manage", Description: "Can manage agencies/clients", Group: "Clients"},
+
+		// Appointment Management
+		{Name: "appointment:manage", Description: "Can manage calendar/bookings", Group: "Appointments"},
+		{Name: "appointment:view", Description: "Can view bookings", Group: "Appointments"},
+		{Name: "appointment:create", Description: "Can create bookings", Group: "Appointments"},
+
+		// Exam Management
+		{Name: "exam:view", Description: "Can view exam sessions", Group: "Exams"},
+		{Name: "exam:create", Description: "Can schedule/create exams", Group: "Exams"},
+		{Name: "exam:conduct", Description: "Can conduct/record exams", Group: "Exams"},
+		{Name: "exam:report", Description: "Can generate/sign forensic reports", Group: "Exams"},
+		{Name: "examtype:view", Description: "Can view exam types", Group: "Exams"},
+		{Name: "examtype:create", Description: "Can create exam types", Group: "Exams"},
+		{Name: "examtype:edit", Description: "Can edit exam types", Group: "Exams"},
+		{Name: "examtype:delete", Description: "Can delete exam types", Group: "Exams"},
+
+		// Availability Management
+		{Name: "availability:view", Description: "Can view examiner availability blocks", Group: "Availability"},
+		{Name: "availability:manage", Description: "Can manage examiner availability blocks", Group: "Availability"},
+		{Name: "availability:check", Description: "Can check examiner availability during booking", Group: "Availability"},
+
+		// Document Management
+		{Name: "document:manage", Description: "Can manage forensic documents/charts", Group: "Exams"},
+
+		// Lead Management
+		{Name: "lead:view", Description: "Can view leads", Group: "Leads"},
+		{Name: "lead:create", Description: "Can create new leads", Group: "Leads"},
+		{Name: "lead:update", Description: "Can update lead status", Group: "Leads"},
+		{Name: "lead:delete", Description: "Can delete leads", Group: "Leads"},
+
+		// Audit Logs
+		{Name: "audit:view", Description: "Can view system audit logs", Group: "Security"},
+	}
+
+	for _, p := range perms {
+		db.FirstOrCreate(&p, rbac.Permission{Name: p.Name})
+	}
+
+	defaultExamTypes := []exams.ExamType{
+		{Name: "Pre-employment Screening", Description: "Baseline screening for employment or onboarding.", Category: "Screening", Duration: 150, Price: 450, Active: true},
+		{Name: "Specific Issue Investigation", Description: "Focused investigation into a reported incident or allegation.", Category: "Investigation", Duration: 150, Price: 600, Active: true},
+		{Name: "Periodic Maintenance", Description: "Recurring trust and compliance maintenance exam.", Category: "Maintenance", Duration: 120, Price: 350, Active: true},
+		{Name: "Criminal Defense Exam", Description: "Defense-oriented forensic examination for criminal matters.", Category: "Legal", Duration: 150, Price: 700, Active: true},
+		{Name: "Civil Litigation Support", Description: "Support examination for civil disputes and case preparation.", Category: "Legal", Duration: 150, Price: 550, Active: true},
+		{Name: "Government/Security Clearance", Description: "Security and clearance review examination.", Category: "Security", Duration: 180, Price: 800, Active: true},
+	}
+	for _, examType := range defaultExamTypes {
+		db.FirstOrCreate(&examType, exams.ExamType{Name: examType.Name})
+	}
+
+	// 2. Define Roles
+
+	// ADMIN: Everything
+	var adminRole rbac.Role
+	db.FirstOrCreate(&adminRole, rbac.Role{Name: "Admin"})
+	var allPerms []rbac.Permission
+	db.Find(&allPerms)
+	db.Model(&adminRole).Association("Permissions").Replace(allPerms)
+
+	// EXAMINER: Subjects and Exams
+	var examinerRole rbac.Role
+	db.FirstOrCreate(&examinerRole, rbac.Role{Name: "Examiner"})
+	var examinerPerms []rbac.Permission
+	db.Where("\"group\" IN ? OR name IN ?", []string{"Subjects", "Exams"}, []string{"availability:view", "availability:manage"}).Find(&examinerPerms)
+	db.Model(&examinerRole).Association("Permissions").Replace(examinerPerms)
+
+	// USER: Lead + client + user management + audit log visibility (default role for auto-provisioned users)
+	var userRole rbac.Role
+	db.FirstOrCreate(&userRole, rbac.Role{Name: "User"})
+	var userPerms []rbac.Permission
+	db.Where("\"group\" IN ? OR name IN ?", []string{"Leads", "Clients", "Users"}, []string{"audit:view", "examtype:view", "appointment:create", "availability:check", "subject:view", "subject:create"}).Find(&userPerms)
+	db.Model(&userRole).Association("Permissions").Replace(userPerms)
+
+	logger.Info("Database seeding completed")
+}

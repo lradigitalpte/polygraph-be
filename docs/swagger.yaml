@@ -1,0 +1,836 @@
+basePath: /api
+definitions:
+  appointments.Appointment:
+    properties:
+      client:
+        $ref: '#/definitions/appointments.Client'
+      client_id:
+        type: integer
+      created_at:
+        type: string
+      duration:
+        description: In minutes
+        type: integer
+      exam_id:
+        type: integer
+      examiner_id:
+        type: integer
+      id:
+        type: integer
+      notes:
+        type: string
+      payment_mode:
+        description: Card, Bank Transfer, Cash
+        type: string
+      payment_status:
+        description: Deposit, Full, None
+        type: string
+      questions_prepared:
+        type: boolean
+      scheduled_at:
+        type: string
+      status:
+        description: pending, confirmed, cancelled, completed
+        type: string
+      subject_id:
+        type: integer
+      updated_at:
+        type: string
+    type: object
+  appointments.Client:
+    properties:
+      address:
+        type: string
+      client_type:
+        description: Individual, Corporate, Law Firm
+        type: string
+      contact_person:
+        description: For companies
+        type: string
+      created_at:
+        type: string
+      email:
+        type: string
+      gender:
+        description: For individuals
+        type: string
+      id:
+        type: integer
+      name:
+        description: Full Name or Company Name
+        type: string
+      notes:
+        type: string
+      phone:
+        type: string
+      preferred_payment_method:
+        type: string
+      tax_id:
+        description: VAT or Company Reg Number
+        type: string
+      updated_at:
+        type: string
+    type: object
+  auditlogs.AuditLogRow:
+    properties:
+      action:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: integer
+      ip:
+        type: string
+      method:
+        type: string
+      path:
+        type: string
+      payload:
+        type: string
+      status:
+        type: integer
+      user_agent:
+        type: string
+      user_email:
+        type: string
+      user_id:
+        type: integer
+    type: object
+  exams.Document:
+    properties:
+      created_at:
+        type: string
+      exam_id:
+        type: integer
+      hash:
+        description: Integrity check
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      type:
+        description: chart, consent, report, audio
+        type: string
+      url:
+        description: Link to S3 or internal storage
+        type: string
+    type: object
+  leads.CreateLeadInput:
+    properties:
+      email:
+        type: string
+      estimated_value:
+        type: number
+      interest:
+        type: string
+      name:
+        type: string
+      next_step:
+        type: string
+      notes:
+        type: string
+      phone:
+        type: string
+      preferred_contact:
+        type: string
+      priority:
+        $ref: '#/definitions/leads.LeadPriority'
+      source:
+        type: string
+    required:
+    - email
+    - interest
+    - name
+    - source
+    type: object
+  leads.Lead:
+    properties:
+      created_at:
+        type: string
+      email:
+        type: string
+      estimated_value:
+        description: Valuation
+        type: number
+      id:
+        type: integer
+      interest:
+        type: string
+      name:
+        description: Identity
+        type: string
+      next_step:
+        description: Next action description
+        type: string
+      notes:
+        type: string
+      phone:
+        type: string
+      preferred_contact:
+        type: string
+      priority:
+        $ref: '#/definitions/leads.LeadPriority'
+      ref:
+        description: Unique intake reference (e.g. LD-5021)
+        type: string
+      source:
+        description: Acquisition metadata
+        type: string
+      status:
+        allOf:
+        - $ref: '#/definitions/leads.LeadStatus'
+        description: Pipeline state
+      updated_at:
+        type: string
+    type: object
+  leads.LeadPriority:
+    enum:
+    - Low
+    - Standard
+    - Priority
+    - Urgent
+    type: string
+    x-enum-varnames:
+    - PriorityLow
+    - PriorityStandard
+    - PriorityHigh
+    - PriorityUrgent
+  leads.LeadStatus:
+    enum:
+    - New
+    - Contacted
+    - Qualified
+    - Converted
+    - Lost
+    type: string
+    x-enum-varnames:
+    - StatusNew
+    - StatusContacted
+    - StatusQualified
+    - StatusConverted
+    - StatusLost
+  leads.UpdateLeadInput:
+    properties:
+      estimated_value:
+        type: number
+      next_step:
+        type: string
+      notes:
+        type: string
+      priority:
+        $ref: '#/definitions/leads.LeadPriority'
+      status:
+        $ref: '#/definitions/leads.LeadStatus'
+    type: object
+  rbac.Permission:
+    properties:
+      description:
+        type: string
+      group:
+        description: e.g. "Exams", "Users"
+        type: string
+      id:
+        type: integer
+      name:
+        description: e.g. "exam:create"
+        type: string
+    type: object
+  rbac.Role:
+    properties:
+      description:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      permissions:
+        items:
+          $ref: '#/definitions/rbac.Permission'
+        type: array
+    type: object
+  subjects.Subject:
+    properties:
+      created_at:
+        type: string
+      dob:
+        description: These fields won't be stored in plaintext in the DB
+        type: string
+      first_name:
+        type: string
+      gender:
+        description: Standard fields
+        type: string
+      id:
+        type: integer
+      id_number:
+        type: string
+      last_name:
+        type: string
+      nationality:
+        type: string
+      spoken_language:
+        type: string
+      updated_at:
+        type: string
+      written_language:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: This is a sample server for my-app.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: my-app API
+  version: "1.0"
+paths:
+  /api/appointments:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/appointments.Appointment'
+            type: array
+      summary: Get all appointments
+      tags:
+      - business
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Appointment Data
+        in: body
+        name: appointment
+        required: true
+        schema:
+          $ref: '#/definitions/appointments.Appointment'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/appointments.Appointment'
+      summary: Schedule a new appointment
+      tags:
+      - business
+  /api/appointments/{id}/status:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Appointment ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Status
+        in: body
+        name: status
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update appointment status
+      tags:
+      - business
+  /api/clients:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/appointments.Client'
+            type: array
+      summary: Get all clients
+      tags:
+      - business
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Client Data
+        in: body
+        name: client
+        required: true
+        schema:
+          $ref: '#/definitions/appointments.Client'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/appointments.Client'
+      summary: Register a new client
+      tags:
+      - business
+  /api/exams/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Exam ID
+        in: formData
+        name: exam_id
+        required: true
+        type: integer
+      - description: Document Type
+        in: formData
+        name: type
+        required: true
+        type: string
+      - description: Document File
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/exams.Document'
+      summary: Upload a forensic document
+      tags:
+      - forensic
+  /api/rbac/permissions:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/rbac.Permission'
+            type: array
+      summary: Get all permissions
+      tags:
+      - rbac
+  /api/rbac/roles:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/rbac.Role'
+            type: array
+      summary: Get all roles
+      tags:
+      - rbac
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Role Data
+        in: body
+        name: role
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/rbac.Role'
+      summary: Create a new role
+      tags:
+      - rbac
+  /api/subjects:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/subjects.Subject'
+            type: array
+      summary: Get all examinees
+      tags:
+      - forensic
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Subject Data
+        in: body
+        name: subject
+        required: true
+        schema:
+          $ref: '#/definitions/subjects.Subject'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/subjects.Subject'
+      summary: Register a new examinee
+      tags:
+      - forensic
+  /audit-logs:
+    get:
+      parameters:
+      - description: Maximum rows (default 100, max 500)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/auditlogs.AuditLogRow'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List audit logs
+      tags:
+      - audit-logs
+  /audit-logs/{id}:
+    get:
+      parameters:
+      - description: Audit log ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auditlogs.AuditLogRow'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get an audit log entry
+      tags:
+      - audit-logs
+  /leads:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/leads.Lead'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List all leads
+      tags:
+      - leads
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Lead intake data
+        in: body
+        name: lead
+        required: true
+        schema:
+          $ref: '#/definitions/leads.CreateLeadInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/leads.Lead'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Record a new lead intake
+      tags:
+      - leads
+  /leads/{id}:
+    delete:
+      parameters:
+      - description: Lead ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Soft-delete a lead
+      tags:
+      - leads
+    get:
+      parameters:
+      - description: Lead ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/leads.Lead'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get a single lead
+      tags:
+      - leads
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Lead ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Fields to update
+        in: body
+        name: lead
+        required: true
+        schema:
+          $ref: '#/definitions/leads.UpdateLeadInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/leads.Lead'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Update lead status or notes
+      tags:
+      - leads
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
