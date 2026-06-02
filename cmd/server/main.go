@@ -95,6 +95,7 @@ func main() {
 		&models.AuditLog{},
 		&rbac.Permission{},
 		&rbac.Role{},
+		&rbac.UserPermission{},
 		&subjects.Subject{},
 		&appointments.Client{},
 		&appointments.Appointment{},
@@ -134,15 +135,16 @@ func main() {
 	dbseed.SeedDatabase(db, logger)
 	forms.SeedTemplates(db)
 
-	// Initialize JWKS for Neon Auth
-	jwksURL := os.Getenv("NEON_JWKS_URL")
-	if jwksURL == "" {
-		logger.Fatal("NEON_JWKS_URL environment variable is required")
+	// Initialize JWKS for token validation (optional — falls back to X-User-Email header if unavailable)
+	if jwksURL := os.Getenv("AUTH_JWKS_URL"); jwksURL != "" {
+		if err := middleware.InitJWKS(jwksURL); err != nil {
+			logger.Warn("JWKS initialization failed — JWT validation disabled, falling back to session header auth", zap.Error(err))
+		} else {
+			logger.Info("JWKS initialized", zap.String("url", jwksURL))
+		}
+	} else {
+		logger.Warn("AUTH_JWKS_URL not set — JWT validation disabled")
 	}
-	if err := middleware.InitJWKS(jwksURL); err != nil {
-		logger.Fatal("Failed to initialize JWKS", zap.Error(err))
-	}
-	logger.Info("Neon Auth JWKS initialized")
 
 	// Get host from environment
 	host := os.Getenv("HOST")

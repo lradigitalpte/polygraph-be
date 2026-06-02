@@ -6,6 +6,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 	me := router.Group("/me")
 	{
 		me.GET("", ctrl.GetMe)
+		me.GET("/permissions", ctrl.GetMyPermissions)
 		me.PATCH("", ctrl.UpdateMe)
 		me.DELETE("", ctrl.DeleteMe)
 	}
@@ -13,10 +14,13 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 	users := router.Group("/users")
 	{
 		users.GET("", permissionMiddleware("user:view"), ctrl.GetAll)
-		users.GET("/examiners", permissionMiddleware("user:view"), ctrl.GetExaminers)
+		// Examiner roster is scheduling context (mapping examiner_id → name), not user admin.
+		users.GET("/examiners", permissionMiddleware("appointment:view"), ctrl.GetExaminers)
 		users.POST("", permissionMiddleware("user:create"), ctrl.Create)
 		users.GET("/:id", permissionMiddleware("user:view"), ctrl.GetByID)
 		users.GET("/:id/activity", permissionMiddleware("user:view"), ctrl.GetActivity)
+		users.GET("/:id/permissions", permissionMiddleware("user:view"), ctrl.GetPermissions)
+		users.PUT("/:id/permissions", permissionMiddleware("user:edit"), ctrl.SetPermissions)
 		users.PATCH("/:id/status", permissionMiddleware("user:edit"), ctrl.UpdateStatus)
 		users.PATCH("/:id/role", permissionMiddleware("user:edit"), ctrl.UpdateRole)
 		users.POST("/:id/require-password-reset", permissionMiddleware("user:edit"), ctrl.RequirePasswordReset)

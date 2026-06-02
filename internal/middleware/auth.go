@@ -81,28 +81,26 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 
 		if isJWT {
-			// Handle JWT validation with JWKS
-			token, err := jwt.Parse(tokenString, jwks.Keyfunc)
-			if err != nil || !token.Valid {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "details": err.Error()})
+			// Attempt JWT validation with JWKS if available
+			if jwks != nil {
+				token, err := jwt.Parse(tokenString, jwks.Keyfunc)
+				if err == nil && token.Valid {
+					if claims, ok := token.Claims.(jwt.MapClaims); ok {
+						email, _ = claims["email"].(string)
+					}
+				}
+			}
+			// Fall back to X-User-Email header if JWT validation failed or JWKS not configured
+			if email == "" {
+				email = c.GetHeader("X-User-Email")
+			}
+			if email == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Could not determine user identity from token"})
 				c.Abort()
 				return
 			}
-
-			// Extract email from JWT claims
-			if claims, ok := token.Claims.(jwt.MapClaims); ok {
-				var ok bool
-				email, ok = claims["email"].(string)
-				if !ok {
-					c.JSON(http.StatusUnauthorized, gin.H{"error": "Email claim not found in token"})
-					c.Abort()
-					return
-				}
-			}
 		} else {
-			// Handle better-auth session token
-			// The frontend should send the user email in the X-User-Email header
-			// after verifying the session locally
+			// Session token — rely on X-User-Email header sent by the frontend
 			email = c.GetHeader("X-User-Email")
 			if email == "" {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "Session token requires X-User-Email header"})
@@ -131,7 +129,9 @@ func AuthMiddleware() gin.HandlerFunc {
 					var defaultRole rbac.Role
 					database.GetDB().Where("name = ?", "User").FirstOrCreate(&defaultRole, rbac.Role{Name: "User", Description: "Default access"})
 					u = auth.User{Email: email, Name: email, RoleID: defaultRole.ID, Status: "active"}
-					if err := database.GetDB().Create(&u).Error; err != nil {
+					// Omit the Role association — otherwise GORM overwrites role_id with the
+					// zero-value association (0), violating the users.role_id FK.
+					if err := database.GetDB().Omit("Role").Create(&u).Error; err != nil {
 						return nil, err
 					}
 					u.Role = defaultRole

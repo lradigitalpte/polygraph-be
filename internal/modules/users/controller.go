@@ -5,6 +5,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+
+	"my-app/internal/middleware"
 )
 
 type Controller struct {
@@ -152,6 +154,25 @@ func (ctrl *Controller) GetMe(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
+func (ctrl *Controller) GetMyPermissions(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	states, err := ctrl.service.GetUserPermissions(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	names := make([]string, 0, len(states))
+	for _, s := range states {
+		if s.Effective {
+			names = append(names, s.Name)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"permissions": names})
+}
+
 func (ctrl *Controller) UpdateMe(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
@@ -196,6 +217,38 @@ func (ctrl *Controller) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
+}
+
+func (ctrl *Controller) GetPermissions(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	perms, err := ctrl.service.GetUserPermissions(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	c.JSON(http.StatusOK, perms)
+}
+
+func (ctrl *Controller) SetPermissions(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	var input SetPermissionsInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := ctrl.service.SetUserPermissions(id, input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// Permission decisions are cached per user — clear so the change takes effect immediately.
+	middleware.InvalidatePermissionCache()
+	c.JSON(http.StatusOK, gin.H{"message": "permissions updated"})
 }
 
 func (ctrl *Controller) GetActivity(c *gin.Context) {

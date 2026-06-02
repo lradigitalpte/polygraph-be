@@ -21,6 +21,15 @@ var permissionSingleflight singleflight.Group
 
 const permissionCacheTTL = 2 * time.Minute
 
+// InvalidatePermissionCache clears all cached permission decisions. Call after
+// changing role permissions or per-user permission overrides.
+func InvalidatePermissionCache() {
+	permissionCache.Range(func(key, _ any) bool {
+		permissionCache.Delete(key)
+		return true
+	})
+}
+
 // PermissionMiddleware checks if the user's role has the required permission
 func PermissionMiddleware(permissionName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -30,8 +39,9 @@ func PermissionMiddleware(permissionName string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		userID, _ := c.Get("user_id")
 
-		cacheKey := fmt.Sprintf("%v:%s", roleID, permissionName)
+		cacheKey := fmt.Sprintf("%v:%v:%s", userID, roleID, permissionName)
 		if cached, ok := permissionCache.Load(cacheKey); ok {
 			entry := cached.(cachedPermissionResult)
 			if time.Now().Before(entry.expiresAt) {
@@ -48,13 +58,32 @@ func PermissionMiddleware(permissionName string) gin.HandlerFunc {
 
 		type sfResult struct{ entry cachedPermissionResult }
 		v, _, _ := permissionSingleflight.Do(cacheKey, func() (interface{}, error) {
-			var count int64
-			err := database.GetDB().
-				Table("role_permissions").
-				Joins("JOIN permissions ON role_permissions.permission_id = permissions.id").
-				Where("role_permissions.role_id = ? AND permissions.name = ?", roleID, permissionName).
-				Count(&count).Error
-			allowed := err == nil && count > 0
+			db := database.GetDB()
+
+			// 1. Per-user override takes precedence over the role.
+			var override struct{ Granted bool }
+			ovr := db.
+				Table("user_permissions").
+				Select("user_permissions.granted").
+				Joins("JOIN permissions ON user_permissions.permission_id = permissions.id").
+				Where("user_permissions.user_id = ? AND permissions.name = ?", userID, permissionName).
+				Limit(1).
+				Scan(&override)
+
+			var allowed bool
+			if ovr.Error == nil && ovr.RowsAffected > 0 {
+				allowed = override.Granted
+			} else {
+				// 2. Fall back to the role's permissions.
+				var count int64
+				err := db.
+					Table("role_permissions").
+					Joins("JOIN permissions ON role_permissions.permission_id = permissions.id").
+					Where("role_permissions.role_id = ? AND permissions.name = ?", roleID, permissionName).
+					Count(&count).Error
+				allowed = err == nil && count > 0
+			}
+
 			entry := cachedPermissionResult{allowed: allowed, expiresAt: time.Now().Add(permissionCacheTTL)}
 			permissionCache.Store(cacheKey, entry)
 			return sfResult{entry: entry}, nil

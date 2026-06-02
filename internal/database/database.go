@@ -3,6 +3,7 @@ package database
 import (
 	"os"
 	"strings"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
@@ -45,6 +46,15 @@ func InitDB() (*gorm.DB, error) {
 			if execErr := DB.Exec(pragma).Error; execErr != nil {
 				return nil, execErr
 			}
+		}
+	} else {
+		// Postgres (Neon): keep a pool of warm connections so requests don't pay the
+		// TLS handshake + auth round-trip to a remote region on every query.
+		if sqlDB, dbErr := DB.DB(); dbErr == nil {
+			sqlDB.SetMaxOpenConns(20)
+			sqlDB.SetMaxIdleConns(10)
+			sqlDB.SetConnMaxIdleTime(4 * time.Minute) // recycle before Neon drops idle conns
+			sqlDB.SetConnMaxLifetime(30 * time.Minute)
 		}
 	}
 

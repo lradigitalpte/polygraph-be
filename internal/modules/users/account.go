@@ -64,7 +64,7 @@ func (s *Service) hardDeleteUser(user *auth.User) error {
 	}
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := deleteNeonAuthUser(tx, user.Email); err != nil {
+		if err := deleteAuthUser(tx, user.Email); err != nil {
 			return fmt.Errorf("failed to remove auth account: %w", err)
 		}
 		if err := tx.Unscoped().Delete(&auth.User{}, user.ID).Error; err != nil {
@@ -75,19 +75,21 @@ func (s *Service) hardDeleteUser(user *auth.User) error {
 	})
 }
 
-func deleteNeonAuthUser(tx *gorm.DB, email string) error {
+// deleteAuthUser removes the self-hosted better-auth credential (user/account/session)
+// for the given email. These tables live in the public schema alongside GORM's tables.
+func deleteAuthUser(tx *gorm.DB, email string) error {
 	var userID string
-	if err := tx.Raw(`SELECT id FROM neon_auth."user" WHERE LOWER(email) = LOWER(?)`, email).Scan(&userID).Error; err != nil {
+	if err := tx.Raw(`SELECT id FROM "user" WHERE LOWER(email) = LOWER(?)`, email).Scan(&userID).Error; err != nil {
 		return err
 	}
 	if userID == "" {
 		return nil
 	}
-	if err := tx.Exec(`DELETE FROM neon_auth.session WHERE "userId" = ?`, userID).Error; err != nil {
+	if err := tx.Exec(`DELETE FROM session WHERE "userId" = ?`, userID).Error; err != nil {
 		return err
 	}
-	if err := tx.Exec(`DELETE FROM neon_auth.account WHERE "userId" = ?`, userID).Error; err != nil {
+	if err := tx.Exec(`DELETE FROM account WHERE "userId" = ?`, userID).Error; err != nil {
 		return err
 	}
-	return tx.Exec(`DELETE FROM neon_auth."user" WHERE id = ?`, userID).Error
+	return tx.Exec(`DELETE FROM "user" WHERE id = ?`, userID).Error
 }

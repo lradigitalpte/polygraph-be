@@ -36,6 +36,26 @@ type UpdateStatusInput struct {
 	Status string `json:"status"`
 }
 
+// PermissionState is a permission plus how it resolves for a specific user.
+type PermissionState struct {
+	ID          uint   `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Group       string `json:"group"`
+	RoleDefault bool   `json:"role_default"` // granted by the user's role
+	Override    *bool  `json:"override"`     // nil = no override, else explicit allow/deny
+	Effective   bool   `json:"effective"`    // what actually applies
+}
+
+type PermissionOverrideInput struct {
+	PermissionID uint `json:"permission_id"`
+	Granted      bool `json:"granted"`
+}
+
+type SetPermissionsInput struct {
+	Overrides []PermissionOverrideInput `json:"overrides"`
+}
+
 func NewService() *Service {
 	return &Service{db: database.GetDB()}
 }
@@ -103,7 +123,9 @@ func (s *Service) Create(input CreateUserInput) (*auth.User, error) {
 		PasswordResetSentAt:   &now,
 	}
 
-	if err := s.db.Create(&user).Error; err != nil {
+	// Omit the Role association — otherwise GORM overwrites role_id with the
+	// zero-value association (0), violating the users.role_id FK.
+	if err := s.db.Omit("Role").Create(&user).Error; err != nil {
 		return nil, err
 	}
 	s.invalidateUsersCache()
@@ -176,6 +198,76 @@ func (s *Service) RequirePasswordReset(id uint) (*auth.User, error) {
 	s.invalidateUsersCache()
 
 	return s.GetByID(id)
+}
+
+// GetUserPermissions returns every permission with its role default, any per-user
+// override, and the effective result for the given user.
+func (s *Service) GetUserPermissions(userID uint) ([]PermissionState, error) {
+	user, err := s.GetByID(userID)
+	if err != nil {
+		return nil, err
+	}
+
+	var allPerms []rbac.Permission
+	if err := s.db.Order("\"group\" ASC, name ASC").Find(&allPerms).Error; err != nil {
+		return nil, err
+	}
+
+	// Permission IDs granted by the user's role.
+	roleGranted := map[uint]bool{}
+	var rolePermRows []struct{ PermissionID uint }
+	s.db.Table("role_permissions").Select("permission_id").Where("role_id = ?", user.RoleID).Scan(&rolePermRows)
+	for _, r := range rolePermRows {
+		roleGranted[r.PermissionID] = true
+	}
+
+	// Per-user overrides.
+	overrides := map[uint]bool{}
+	var ovrRows []rbac.UserPermission
+	s.db.Where("user_id = ?", userID).Find(&ovrRows)
+	for _, o := range ovrRows {
+		overrides[o.PermissionID] = o.Granted
+	}
+
+	states := make([]PermissionState, 0, len(allPerms))
+	for _, p := range allPerms {
+		roleDefault := roleGranted[p.ID]
+		state := PermissionState{
+			ID:          p.ID,
+			Name:        p.Name,
+			Description: p.Description,
+			Group:       p.Group,
+			RoleDefault: roleDefault,
+			Effective:   roleDefault,
+		}
+		if granted, ok := overrides[p.ID]; ok {
+			g := granted
+			state.Override = &g
+			state.Effective = granted
+		}
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+// SetUserPermissions replaces all per-user overrides for a user in one transaction.
+func (s *Service) SetUserPermissions(userID uint, input SetPermissionsInput) error {
+	if _, err := s.GetByID(userID); err != nil {
+		return err
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ?", userID).Delete(&rbac.UserPermission{}).Error; err != nil {
+			return err
+		}
+		if len(input.Overrides) == 0 {
+			return nil
+		}
+		rows := make([]rbac.UserPermission, 0, len(input.Overrides))
+		for _, o := range input.Overrides {
+			rows = append(rows, rbac.UserPermission{UserID: userID, PermissionID: o.PermissionID, Granted: o.Granted})
+		}
+		return tx.Create(&rows).Error
+	})
 }
 
 func (s *Service) GetActivity(id uint, limit int) ([]models.AuditLog, error) {

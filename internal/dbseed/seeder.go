@@ -60,6 +60,12 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 
 		// Audit Logs
 		{Name: "audit:view", Description: "Can view system audit logs", Group: "Security"},
+
+		// Payments / Billing
+		{Name: "payment:view", Description: "Can view payments and financial billing", Group: "Payments"},
+
+		// Reminders
+		{Name: "reminder:view", Description: "Can view and send reminders", Group: "Reminders"},
 	}
 
 	for _, p := range perms {
@@ -91,14 +97,14 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 	var examinerRole rbac.Role
 	db.FirstOrCreate(&examinerRole, rbac.Role{Name: "Examiner"})
 	var examinerPerms []rbac.Permission
-	db.Where("\"group\" IN ? OR name IN ?", []string{"Subjects", "Exams"}, []string{"availability:view", "availability:manage"}).Find(&examinerPerms)
+	db.Where("\"group\" IN ? OR name IN ?", []string{"Subjects", "Exams"}, []string{"availability:view", "availability:manage", "appointment:view", "appointment:create", "availability:check"}).Find(&examinerPerms)
 	db.Model(&examinerRole).Association("Permissions").Replace(examinerPerms)
 
 	// USER: Lead + client + user management + audit log visibility (default role for auto-provisioned users)
 	var userRole rbac.Role
 	db.FirstOrCreate(&userRole, rbac.Role{Name: "User"})
 	var userPerms []rbac.Permission
-	db.Where("\"group\" IN ? OR name IN ?", []string{"Leads", "Clients", "Users"}, []string{"audit:view", "examtype:view", "appointment:create", "availability:check", "subject:view", "subject:create"}).Find(&userPerms)
+	db.Where("\"group\" IN ? OR name IN ?", []string{"Leads", "Clients", "Users"}, []string{"audit:view", "examtype:view", "appointment:view", "appointment:create", "availability:check", "subject:view", "subject:create", "payment:view", "reminder:view"}).Find(&userPerms)
 	db.Model(&userRole).Association("Permissions").Replace(userPerms)
 
 	logger.Info("Database seeding completed")
