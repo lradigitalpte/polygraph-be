@@ -135,16 +135,9 @@ func main() {
 	dbseed.SeedDatabase(db, logger)
 	forms.SeedTemplates(db)
 
-	// Initialize JWKS for token validation (optional — falls back to X-User-Email header if unavailable)
-	if jwksURL := os.Getenv("AUTH_JWKS_URL"); jwksURL != "" {
-		if err := middleware.InitJWKS(jwksURL); err != nil {
-			logger.Warn("JWKS initialization failed — JWT validation disabled, falling back to session header auth", zap.Error(err))
-		} else {
-			logger.Info("JWKS initialized", zap.String("url", jwksURL))
-		}
-	} else {
-		logger.Warn("AUTH_JWKS_URL not set — JWT validation disabled")
-	}
+	// Auth: better-auth session tokens are validated against the shared session table
+	// (see middleware.AuthMiddleware). No JWKS/JWT setup required.
+	logger.Info("Auth: validating better-auth sessions against shared database")
 
 	// Get host from environment
 	host := os.Getenv("HOST")

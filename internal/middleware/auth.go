@@ -6,17 +6,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MicahParks/keyfunc/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/sync/singleflight"
 
 	"my-app/internal/database"
 	"my-app/internal/modules/auth"
 	"my-app/internal/modules/rbac"
 )
-
-var jwks *keyfunc.JWKS
 
 type cachedAuthUser struct {
 	user      auth.User
@@ -28,85 +24,100 @@ var authSingleflight singleflight.Group
 
 const authUserCacheTTL = 3 * time.Second
 
-// InitJWKS initializes the JWKS from the Neon Auth endpoint
-func InitJWKS(jwksURL string) error {
-	var err error
-	jwks, err = keyfunc.Get(jwksURL, keyfunc.Options{})
-	return err
+// Validated session tokens are cached briefly so we don't hit the session table on
+// every single request. Kept short so logout / expiry take effect almost immediately.
+type cachedSession struct {
+	email      string
+	cacheUntil time.Time
 }
 
-// AuthMiddleware verifies auth via JWT or better-auth session token
+var sessionCache sync.Map
+
+const sessionCacheTTL = 5 * time.Second
+
+// extractSessionToken pulls the raw better-auth session token from a Bearer header
+// or a session cookie. Signed cookies are "<token>.<signature>"; the DB stores the
+// raw token, so we take the part before the signature.
+func extractSessionToken(c *gin.Context) string {
+	if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			return stripCookieSignature(strings.TrimSpace(parts[1]))
+		}
+	}
+	for _, name := range []string{
+		"better-auth.session_token",
+		"__Secure-better-auth.session_token",
+		"session_token",
+	} {
+		if cookie, err := c.Cookie(name); err == nil && cookie != "" {
+			return stripCookieSignature(cookie)
+		}
+	}
+	return ""
+}
+
+func stripCookieSignature(v string) string {
+	if i := strings.IndexByte(v, '.'); i > 0 {
+		return v[:i]
+	}
+	return v
+}
+
+// validateSession verifies a better-auth session token against the shared session
+// table and returns the authenticated user's email. Missing or expired sessions are
+// rejected — the expiry check is what enforces inactivity logout server-side. This is
+// the ONLY source of identity; client-supplied identity headers are never trusted.
+func validateSession(token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	if cached, ok := sessionCache.Load(token); ok {
+		entry := cached.(cachedSession)
+		if time.Now().Before(entry.cacheUntil) {
+			return entry.email, entry.email != ""
+		}
+		sessionCache.Delete(token)
+	}
+
+	var row struct {
+		Email     string
+		ExpiresAt time.Time
+	}
+	err := database.GetDB().
+		Table("session").
+		Select(`"user".email AS email, session."expiresAt" AS expires_at`).
+		Joins(`JOIN "user" ON "user".id = session."userId"`).
+		Where("session.token = ?", token).
+		Limit(1).
+		Scan(&row).Error
+
+	if err != nil || row.Email == "" || time.Now().After(row.ExpiresAt) {
+		// Cache the negative result briefly to blunt token-guessing / replay floods.
+		sessionCache.Store(token, cachedSession{email: "", cacheUntil: time.Now().Add(sessionCacheTTL)})
+		return "", false
+	}
+	sessionCache.Store(token, cachedSession{email: row.Email, cacheUntil: time.Now().Add(sessionCacheTTL)})
+	return row.Email, true
+}
+
+// AuthMiddleware authenticates the request by validating the better-auth session
+// token against the shared session table. Identity comes only from a verified
+// session — never from a client-supplied header.
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var tokenString string
-		var isJWT bool
-		var email string
-
-		// Try 1: Check Authorization header (Bearer token)
-		authHeader := c.GetHeader("Authorization")
-		if authHeader != "" {
-			parts := strings.Split(authHeader, " ")
-			if len(parts) == 2 && parts[0] == "Bearer" {
-				tokenString = parts[1]
-
-				// Check if it looks like a JWT (has 3 parts separated by dots)
-				if strings.Count(tokenString, ".") == 2 {
-					isJWT = true
-				}
-			}
-		}
-
-		// Try 2: If no Bearer token, try to read from cookies (better-auth session)
-		if tokenString == "" {
-			possibleCookies := []string{
-				"better-auth.session_token",
-				"session_token",
-				"authjs.session-token",
-				"auth.session",
-				"better-auth",
-			}
-
-			for _, cookieName := range possibleCookies {
-				if cookie, err := c.Cookie(cookieName); err == nil && cookie != "" {
-					tokenString = cookie
-					break
-				}
-			}
-		}
-
-		if tokenString == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header (Bearer token) or session cookie required"})
+		token := extractSessionToken(c)
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
 			c.Abort()
 			return
 		}
 
-		if isJWT {
-			// Attempt JWT validation with JWKS if available
-			if jwks != nil {
-				token, err := jwt.Parse(tokenString, jwks.Keyfunc)
-				if err == nil && token.Valid {
-					if claims, ok := token.Claims.(jwt.MapClaims); ok {
-						email, _ = claims["email"].(string)
-					}
-				}
-			}
-			// Fall back to X-User-Email header if JWT validation failed or JWKS not configured
-			if email == "" {
-				email = c.GetHeader("X-User-Email")
-			}
-			if email == "" {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Could not determine user identity from token"})
-				c.Abort()
-				return
-			}
-		} else {
-			// Session token — rely on X-User-Email header sent by the frontend
-			email = c.GetHeader("X-User-Email")
-			if email == "" {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Session token requires X-User-Email header"})
-				c.Abort()
-				return
-			}
+		email, ok := validateSession(token)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired session"})
+			c.Abort()
+			return
 		}
 
 		// Find user in database to get their role in one query.
