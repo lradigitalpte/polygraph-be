@@ -5,6 +5,8 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+
+	"my-app/internal/middleware"
 )
 
 type Controller struct {
@@ -13,6 +15,36 @@ type Controller struct {
 
 func NewController(service *Service) *Controller {
 	return &Controller{service: service}
+}
+
+// restrictToExaminer returns the examiner's user id when the caller only has
+// examiner-level access (no client:manage) and may therefore only touch records tied
+// to their own appointments. Returns (0, false) when the caller has full access.
+func restrictToExaminer(c *gin.Context) (uint, bool) {
+	if middleware.HasPermission(c, "client:manage") {
+		return 0, false
+	}
+	if uid, ok := c.Get("user_id"); ok {
+		if id, ok := uid.(uint); ok && id > 0 {
+			return id, true
+		}
+	}
+	return 0, true // restricted but no resolvable id → deny
+}
+
+// hideFinancials zeroes out monetary fields for callers without payment:view (e.g.
+// examiners). Payment status (Paid/Partial/Unpaid) is preserved — only amounts and
+// payment mode are hidden.
+func hideFinancials(c *gin.Context, appointments []Appointment) []Appointment {
+	if middleware.HasPermission(c, "payment:view") {
+		return appointments
+	}
+	for i := range appointments {
+		appointments[i].ExamFee = 0
+		appointments[i].CollectedAmount = 0
+		appointments[i].PaymentMode = ""
+	}
+	return appointments
 }
 
 // CreateClient godoc
@@ -44,7 +76,15 @@ func (ctrl *Controller) CreateClient(c *gin.Context) {
 // @Success 200 {array} Client
 // @Router /api/clients [get]
 func (ctrl *Controller) GetClients(c *gin.Context) {
-	clients, err := ctrl.service.GetAllClients(c.Query("search"))
+	var (
+		clients []Client
+		err     error
+	)
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		clients, err = ctrl.service.GetClientsForExaminer(examinerID, c.Query("search"))
+	} else {
+		clients, err = ctrl.service.GetAllClients(c.Query("search"))
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch clients"})
 		return
@@ -53,6 +93,12 @@ func (ctrl *Controller) GetClients(c *gin.Context) {
 }
 
 func (ctrl *Controller) GetClient(c *gin.Context) {
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		if !ctrl.service.ExaminerOwnsClient(examinerID, c.Param("id")) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this client"})
+			return
+		}
+	}
 	client, err := ctrl.service.GetClientByID(c.Param("id"))
 	if err != nil {
 		if err.Error() == "client not found" {
@@ -110,6 +156,12 @@ func (ctrl *Controller) UpdateClient(c *gin.Context) {
 }
 
 func (ctrl *Controller) GetClientExaminees(c *gin.Context) {
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		if !ctrl.service.ExaminerOwnsClient(examinerID, c.Param("id")) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this client"})
+			return
+		}
+	}
 	entries, err := ctrl.service.GetClientExaminees(c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -160,6 +212,12 @@ func (ctrl *Controller) BulkCreateExaminees(c *gin.Context) {
 }
 
 func (ctrl *Controller) GetSubjectAppointments(c *gin.Context) {
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		if !ctrl.service.ExaminerOwnsSubject(examinerID, c.Param("id")) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this examinee"})
+			return
+		}
+	}
 	appointments, err := ctrl.service.GetSubjectAppointments(c.Param("id"), c.Query("client_id"))
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -169,19 +227,31 @@ func (ctrl *Controller) GetSubjectAppointments(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, appointments)
+	c.JSON(http.StatusOK, hideFinancials(c, appointments))
 }
 
 func (ctrl *Controller) GetClientAppointments(c *gin.Context) {
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		if !ctrl.service.ExaminerOwnsClient(examinerID, c.Param("id")) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this client"})
+			return
+		}
+	}
 	appointments, err := ctrl.service.GetAllAppointments(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch appointments"})
 		return
 	}
-	c.JSON(http.StatusOK, appointments)
+	c.JSON(http.StatusOK, hideFinancials(c, appointments))
 }
 
 func (ctrl *Controller) GetClientDocuments(c *gin.Context) {
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		if !ctrl.service.ExaminerOwnsClient(examinerID, c.Param("id")) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this client"})
+			return
+		}
+	}
 	docs, err := ctrl.service.GetClientDocuments(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch documents"})
@@ -321,10 +391,16 @@ func (ctrl *Controller) GetAppointments(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch appointments"})
 		return
 	}
-	c.JSON(http.StatusOK, appointments)
+	c.JSON(http.StatusOK, hideFinancials(c, appointments))
 }
 
 func (ctrl *Controller) GetAppointment(c *gin.Context) {
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		if !ctrl.service.ExaminerOwnsAppointment(examinerID, c.Param("id")) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this appointment"})
+			return
+		}
+	}
 	appointment, err := ctrl.service.GetAppointmentByID(c.Param("id"))
 	if err != nil {
 		if err.Error() == "appointment not found" {
@@ -333,6 +409,11 @@ func (ctrl *Controller) GetAppointment(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch appointment"})
 		return
+	}
+	if !middleware.HasPermission(c, "payment:view") {
+		appointment.ExamFee = 0
+		appointment.CollectedAmount = 0
+		appointment.PaymentMode = ""
 	}
 	c.JSON(http.StatusOK, appointment)
 }
@@ -354,6 +435,18 @@ func (ctrl *Controller) UpdateAppointment(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, appointment)
+}
+
+func (ctrl *Controller) DeleteAppointment(c *gin.Context) {
+	if err := ctrl.service.DeleteAppointment(c.Param("id")); err != nil {
+		if err.Error() == "appointment not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete appointment"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "appointment deleted"})
 }
 
 // UpdateStatus godoc

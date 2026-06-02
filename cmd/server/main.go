@@ -206,6 +206,8 @@ func main() {
 	// Initialize Services & Controllers
 	rbacService := rbac.NewService()
 	rbacCtrl := rbac.NewController(rbacService)
+	// Clear the auth permission cache when role permissions change so edits take effect immediately.
+	rbacCtrl.SetOnChange(middleware.InvalidatePermissionCache)
 
 	subjectService := subjects.NewService()
 	subjectCtrl := subjects.NewController(subjectService)

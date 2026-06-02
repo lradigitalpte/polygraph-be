@@ -10,5 +10,6 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller) {
 		rbac.GET("/permissions", ctrl.GetPermissions)
 		rbac.GET("/roles", ctrl.GetRoles)
 		rbac.POST("/roles", ctrl.CreateRole)
+		rbac.PUT("/roles/:id", ctrl.UpdateRole)
 	}
 }

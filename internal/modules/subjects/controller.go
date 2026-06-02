@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"my-app/internal/middleware"
 )
 
 type Controller struct {
@@ -12,6 +14,20 @@ type Controller struct {
 
 func NewController(service *Service) *Controller {
 	return &Controller{service: service}
+}
+
+// restrictToExaminer returns the examiner's user id when the caller only has
+// examiner-level access (no client:manage) and may only see their own examinees.
+func restrictToExaminer(c *gin.Context) (uint, bool) {
+	if middleware.HasPermission(c, "client:manage") {
+		return 0, false
+	}
+	if uid, ok := c.Get("user_id"); ok {
+		if id, ok := uid.(uint); ok && id > 0 {
+			return id, true
+		}
+	}
+	return 0, true
 }
 
 // Create godoc
@@ -44,7 +60,15 @@ func (ctrl *Controller) Create(c *gin.Context) {
 // @Success 200 {array} Subject
 // @Router /api/subjects [get]
 func (ctrl *Controller) GetAll(c *gin.Context) {
-	subjects, err := ctrl.service.GetAll(c.Query("search"), c.Query("client_id"))
+	var (
+		subjects []Subject
+		err      error
+	)
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		subjects, err = ctrl.service.GetAllForExaminer(examinerID, c.Query("search"), c.Query("client_id"))
+	} else {
+		subjects, err = ctrl.service.GetAll(c.Query("search"), c.Query("client_id"))
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch subjects"})
 		return
@@ -53,6 +77,12 @@ func (ctrl *Controller) GetAll(c *gin.Context) {
 }
 
 func (ctrl *Controller) GetByID(c *gin.Context) {
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		if !ctrl.service.ExaminerOwnsSubject(examinerID, c.Param("id")) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this examinee"})
+			return
+		}
+	}
 	subject, err := ctrl.service.GetByID(c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError

@@ -27,6 +27,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 		{Name: "subject:edit", Description: "Can edit examinee profiles", Group: "Subjects"},
 
 		// Client Management
+		{Name: "client:view", Description: "Can view client details (read-only, no billing)", Group: "Clients"},
 		{Name: "client:manage", Description: "Can manage agencies/clients", Group: "Clients"},
 
 		// Appointment Management
@@ -85,27 +86,36 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 	}
 
 	// 2. Define Roles
+	//
+	// NOTE: default role permissions are seeded ONLY when a role has no permissions
+	// yet (first creation). After that, admins manage them via the Roles UI and we
+	// must NOT clobber their changes on every boot. Admin is the exception — it
+	// always gets every permission (including newly added ones).
 
-	// ADMIN: Everything
+	// ADMIN: always everything.
 	var adminRole rbac.Role
 	db.FirstOrCreate(&adminRole, rbac.Role{Name: "Admin"})
 	var allPerms []rbac.Permission
 	db.Find(&allPerms)
 	db.Model(&adminRole).Association("Permissions").Replace(allPerms)
 
-	// EXAMINER: Subjects and Exams
+	// EXAMINER: Subjects and Exams (defaults only on first creation).
 	var examinerRole rbac.Role
 	db.FirstOrCreate(&examinerRole, rbac.Role{Name: "Examiner"})
-	var examinerPerms []rbac.Permission
-	db.Where("\"group\" IN ? OR name IN ?", []string{"Subjects", "Exams"}, []string{"availability:view", "availability:manage", "appointment:view", "appointment:create", "availability:check"}).Find(&examinerPerms)
-	db.Model(&examinerRole).Association("Permissions").Replace(examinerPerms)
+	if db.Model(&examinerRole).Association("Permissions").Count() == 0 {
+		var examinerPerms []rbac.Permission
+		db.Where("\"group\" IN ? OR name IN ?", []string{"Subjects", "Exams"}, []string{"availability:view", "availability:manage", "appointment:view", "appointment:create", "availability:check", "client:view"}).Find(&examinerPerms)
+		db.Model(&examinerRole).Association("Permissions").Replace(examinerPerms)
+	}
 
-	// USER: Lead + client + user management + audit log visibility (default role for auto-provisioned users)
+	// USER: default role for auto-provisioned users (defaults only on first creation).
 	var userRole rbac.Role
 	db.FirstOrCreate(&userRole, rbac.Role{Name: "User"})
-	var userPerms []rbac.Permission
-	db.Where("\"group\" IN ? OR name IN ?", []string{"Leads", "Clients", "Users"}, []string{"audit:view", "examtype:view", "appointment:view", "appointment:create", "availability:check", "subject:view", "subject:create", "payment:view", "reminder:view"}).Find(&userPerms)
-	db.Model(&userRole).Association("Permissions").Replace(userPerms)
+	if db.Model(&userRole).Association("Permissions").Count() == 0 {
+		var userPerms []rbac.Permission
+		db.Where("\"group\" IN ? OR name IN ?", []string{"Leads", "Clients", "Users"}, []string{"audit:view", "examtype:view", "appointment:view", "appointment:create", "availability:check", "subject:view", "subject:create", "payment:view", "reminder:view"}).Find(&userPerms)
+		db.Model(&userRole).Association("Permissions").Replace(userPerms)
+	}
 
 	logger.Info("Database seeding completed")
 }

@@ -63,6 +63,41 @@ func (s *Service) GetClientByID(id string) (*Client, error) {
 	return &client, nil
 }
 
+// GetClientsForExaminer returns only clients the examiner has appointments with.
+func (s *Service) GetClientsForExaminer(examinerID uint, search ...string) ([]Client, error) {
+	var clients []Client
+	owned := s.db.Model(&Appointment{}).Select("client_id").Where("examiner_id = ?", examinerID)
+	query := s.db.Order("name ASC").Where("id IN (?)", owned)
+	if len(search) > 0 {
+		if trimmed := strings.TrimSpace(strings.ToLower(search[0])); trimmed != "" {
+			like := "%" + trimmed + "%"
+			query = query.Where("LOWER(name) LIKE ? OR LOWER(email) LIKE ? OR LOWER(contact_person) LIKE ?", like, like, like)
+		}
+	}
+	err := query.Find(&clients).Error
+	return clients, err
+}
+
+// Ownership checks — an examiner "owns" a client/appointment/subject when they have
+// at least one appointment linking them to it.
+func (s *Service) ExaminerOwnsClient(examinerID uint, clientID string) bool {
+	var count int64
+	s.db.Model(&Appointment{}).Where("examiner_id = ? AND client_id = ?", examinerID, clientID).Count(&count)
+	return count > 0
+}
+
+func (s *Service) ExaminerOwnsAppointment(examinerID uint, appointmentID string) bool {
+	var count int64
+	s.db.Model(&Appointment{}).Where("examiner_id = ? AND id = ?", examinerID, appointmentID).Count(&count)
+	return count > 0
+}
+
+func (s *Service) ExaminerOwnsSubject(examinerID uint, subjectID string) bool {
+	var count int64
+	s.db.Model(&Appointment{}).Where("examiner_id = ? AND subject_id = ?", examinerID, subjectID).Count(&count)
+	return count > 0
+}
+
 func (s *Service) UpdateClient(id string, input *Client) error {
 	var client Client
 	if err := s.db.First(&client, id).Error; err != nil {
@@ -289,6 +324,7 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 
 	allowed := map[string]bool{
 		"notes": true, "status": true, "questions_prepared": true, "exam_id": true,
+		"scheduled_at": true, "duration": true, "examiner_id": true,
 	}
 	safe := make(map[string]interface{})
 	for key, value := range updates {
@@ -300,6 +336,46 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 		return &appointment, nil
 	}
 
+	// Reschedule path — validate the new slot against Sundays, examiner blocks, and
+	// other appointments (excluding this one) before persisting.
+	rescheduled := false
+	newScheduledAt := appointment.ScheduledAt
+	newDuration := appointment.Duration
+	newExaminer := appointment.ExaminerID
+
+	if v, ok := safe["scheduled_at"].(string); ok && v != "" {
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, errors.New("scheduled_at must be an RFC3339 timestamp")
+		}
+		if parsed.UTC().Weekday() == time.Sunday {
+			return nil, errors.New("appointments cannot be scheduled on Sunday")
+		}
+		newScheduledAt = parsed
+		safe["scheduled_at"] = parsed
+		rescheduled = true
+	}
+	if v, ok := safe["duration"].(float64); ok {
+		newDuration = int(v)
+	}
+	if v, ok := safe["examiner_id"].(float64); ok {
+		newExaminer = uint(v)
+		rescheduled = true
+	}
+
+	if rescheduled {
+		if blocked, err := s.hasAvailabilityConflict(newExaminer, newScheduledAt, newDuration); err != nil {
+			return nil, err
+		} else if blocked {
+			return nil, errors.New("selected slot conflicts with examiner availability")
+		}
+		if conflict, err := s.hasAppointmentConflictExcluding(newExaminer, newScheduledAt, newDuration, appointment.ID); err != nil {
+			return nil, err
+		} else if conflict {
+			return nil, errors.New("selected slot overlaps an existing appointment")
+		}
+	}
+
 	if err := s.db.Model(&appointment).Updates(safe).Error; err != nil {
 		return nil, err
 	}
@@ -307,6 +383,17 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 		return nil, err
 	}
 	return &appointment, nil
+}
+
+func (s *Service) DeleteAppointment(id string) error {
+	result := s.db.Delete(&Appointment{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("appointment not found")
+	}
+	return nil
 }
 
 func (s *Service) UpdateStatus(id string, status string) error {
@@ -547,13 +634,21 @@ func (s *Service) hasAvailabilityConflict(examinerID uint, scheduledAt time.Time
 }
 
 func (s *Service) hasAppointmentConflict(examinerID uint, scheduledAt time.Time, duration int) (bool, error) {
+	return s.hasAppointmentConflictExcluding(examinerID, scheduledAt, duration, 0)
+}
+
+// hasAppointmentConflictExcluding is the overlap check, ignoring one appointment id
+// (used when rescheduling so an appointment doesn't conflict with itself).
+func (s *Service) hasAppointmentConflictExcluding(examinerID uint, scheduledAt time.Time, duration int, excludeID uint) (bool, error) {
 	var existing []Appointment
 	windowStart := scheduledAt.Add(-24 * time.Hour)
 	windowEnd := scheduledAt.Add(24 * time.Hour)
-	err := s.db.
-		Where("examiner_id = ? AND status <> ? AND scheduled_at >= ? AND scheduled_at <= ?", examinerID, "cancelled", windowStart, windowEnd).
-		Find(&existing).Error
-	if err != nil {
+	query := s.db.
+		Where("examiner_id = ? AND status <> ? AND scheduled_at >= ? AND scheduled_at <= ?", examinerID, "cancelled", windowStart, windowEnd)
+	if excludeID > 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	if err := query.Find(&existing).Error; err != nil {
 		return false, err
 	}
 

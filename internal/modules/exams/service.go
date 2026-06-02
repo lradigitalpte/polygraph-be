@@ -284,7 +284,33 @@ func (s *Service) UpdateExam(id string, updates map[string]interface{}) (*Exam, 
 			return nil, err
 		}
 	}
+
+	// Keep the linked appointment's status in sync so admin/ops views and the
+	// examiner's documentation always agree on where the session stands.
+	if newStatus, ok := safe["status"].(string); ok && exam.AppointmentID != nil {
+		if apptStatus := examToAppointmentStatus(newStatus); apptStatus != "" {
+			s.db.Model(&appointmentLink{}).Where("id = ?", *exam.AppointmentID).Update("status", apptStatus)
+		}
+	}
+
 	return s.GetExamByID(id)
+}
+
+// examToAppointmentStatus maps an exam workflow status to the appointment status the
+// rest of the app (dashboard, exam history, billing ledger) reads.
+func examToAppointmentStatus(examStatus string) string {
+	switch examStatus {
+	case "scheduled":
+		return "pending"
+	case "in_progress":
+		return "confirmed"
+	case "completed":
+		return "completed"
+	case "cancelled":
+		return "cancelled"
+	default:
+		return ""
+	}
 }
 
 func (s *Service) StartDocumentationForAppointment(appointmentID string) (*Exam, error) {

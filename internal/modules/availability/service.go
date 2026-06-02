@@ -49,7 +49,61 @@ func (s *Service) CreateBlock(block *Block) error {
 		return errors.New("examiner not found")
 	}
 
+	if err := s.ensureNoAppointmentConflict(block); err != nil {
+		return err
+	}
+
 	return s.db.Create(block).Error
+}
+
+// ensureNoAppointmentConflict rejects a block that would cover an exam the examiner
+// already has booked — you can't block time you're already committed to.
+func (s *Service) ensureNoAppointmentConflict(block *Block) error {
+	dayStart := block.Date.UTC().Truncate(24 * time.Hour)
+	dayEnd := dayStart.Add(24 * time.Hour)
+
+	type apptRow struct {
+		ScheduledAt time.Time
+		Duration    int
+	}
+	var rows []apptRow
+	if err := s.db.Table("appointments").
+		Select("scheduled_at, duration").
+		Where("examiner_id = ? AND status <> ? AND scheduled_at >= ? AND scheduled_at < ?",
+			block.ExaminerID, "cancelled", dayStart, dayEnd).
+		Find(&rows).Error; err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	if block.IsFullDay {
+		return errors.New("cannot block this day — you have exam(s) scheduled. Reschedule or cancel them first")
+	}
+
+	blockStart := clockMinutes(block.StartTime)
+	blockEnd := clockMinutes(block.EndTime)
+	for _, r := range rows {
+		if r.Duration <= 0 {
+			r.Duration = 150
+		}
+		start := r.ScheduledAt.UTC()
+		apptStart := start.Hour()*60 + start.Minute()
+		apptEnd := apptStart + r.Duration
+		if apptStart < blockEnd && apptEnd > blockStart {
+			return errors.New("this time range overlaps an exam you have booked — choose a different time")
+		}
+	}
+	return nil
+}
+
+func clockMinutes(hhmm string) int {
+	t, err := time.Parse("15:04", hhmm)
+	if err != nil {
+		return 0
+	}
+	return t.Hour()*60 + t.Minute()
 }
 
 func (s *Service) UpdateBlock(id uint, updates map[string]interface{}) (*Block, error) {
@@ -96,6 +150,9 @@ func (s *Service) UpdateBlock(id uint, updates map[string]interface{}) (*Block, 
 	}
 
 	if err := s.normalizeAndValidateBlock(&merged); err != nil {
+		return nil, err
+	}
+	if err := s.ensureNoAppointmentConflict(&merged); err != nil {
 		return nil, err
 	}
 	if err := s.db.Model(&block).Updates(updates).Error; err != nil {

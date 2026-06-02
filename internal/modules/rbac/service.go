@@ -1,9 +1,12 @@
 package rbac
 
 import (
-	"my-app/internal/database"
+	"errors"
+	"strings"
 	"sync"
 	"time"
+
+	"my-app/internal/database"
 
 	"gorm.io/gorm"
 )
@@ -121,6 +124,50 @@ func (s *Service) GetAllRoles() ([]Role, error) {
 	return roles, err
 }
 
+// UpdateRole updates a role's name/description and/or replaces its permission set.
+// Any nil field is left unchanged.
+func (s *Service) UpdateRole(id uint, name, description *string, permissionIDs *[]uint) (*Role, error) {
+	var role Role
+	if err := s.db.First(&role, id).Error; err != nil {
+		return nil, errors.New("role not found")
+	}
+
+	updates := map[string]interface{}{}
+	if name != nil {
+		trimmed := strings.TrimSpace(*name)
+		if trimmed == "" {
+			return nil, errors.New("role name cannot be empty")
+		}
+		updates["name"] = trimmed
+	}
+	if description != nil {
+		updates["description"] = strings.TrimSpace(*description)
+	}
+	if len(updates) > 0 {
+		if err := s.db.Model(&role).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	if permissionIDs != nil {
+		var permissions []Permission
+		if len(*permissionIDs) > 0 {
+			s.db.Find(&permissions, *permissionIDs)
+		}
+		if err := s.db.Model(&role).Association("Permissions").Replace(permissions); err != nil {
+			return nil, err
+		}
+	}
+
+	s.invalidateCaches()
+
+	var updated Role
+	if err := s.db.Preload("Permissions").First(&updated, id).Error; err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
 func (s *Service) CreateRole(name, description string, permissionIDs []uint) (*Role, error) {
 	var permissions []Permission
 	if len(permissionIDs) > 0 {
@@ -135,16 +182,20 @@ func (s *Service) CreateRole(name, description string, permissionIDs []uint) (*R
 
 	err := s.db.Create(&role).Error
 	if err == nil {
-		s.mu.Lock()
-		s.rolesCache = nil
-		s.permissionsCache = nil
-		s.rolesCacheUntil = time.Time{}
-		s.permissionsCacheUntil = time.Time{}
-		s.rolesWaiters = nil
-		s.permissionsWaiters = nil
-		s.rolesLoading = false
-		s.permissionsLoading = false
-		s.mu.Unlock()
+		s.invalidateCaches()
 	}
 	return &role, err
+}
+
+func (s *Service) invalidateCaches() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rolesCache = nil
+	s.permissionsCache = nil
+	s.rolesCacheUntil = time.Time{}
+	s.permissionsCacheUntil = time.Time{}
+	s.rolesWaiters = nil
+	s.permissionsWaiters = nil
+	s.rolesLoading = false
+	s.permissionsLoading = false
 }
