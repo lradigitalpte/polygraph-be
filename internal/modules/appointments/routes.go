@@ -56,5 +56,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		q.POST("", permissionMiddleware("appointment:manage"), ctrl.CreateQuotation)
 		q.PATCH("/:id/send-email", permissionMiddleware("appointment:manage"), ctrl.SendQuotationEmail)
 		q.PATCH("/:id/collect-payment", permissionMiddleware("appointment:manage"), ctrl.CollectQuotationPayment)
+		q.POST("/:id/convert", permissionMiddleware("appointment:create"), ctrl.ConvertQuotation)
+		q.DELETE("/:id", permissionMiddleware("payment:manage"), ctrl.DeleteQuotation)
 	}
 }

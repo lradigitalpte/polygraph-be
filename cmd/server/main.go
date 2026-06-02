@@ -242,7 +242,8 @@ func main() {
 
 	// API Routes
 	api := r.Group("/api")
-	api.Use(middleware.AuthMiddleware()) // Protect all /api routes
+	api.Use(middleware.AuthMiddleware())  // Protect all /api routes
+	api.Use(middleware.Deduplicate())     // Prevent accidental double-submits (idempotency)
 	{
 		// Register Modular Routes
 		rbac.RegisterRoutes(api, rbacCtrl)

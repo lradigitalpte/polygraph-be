@@ -64,6 +64,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 
 		// Payments / Billing
 		{Name: "payment:view", Description: "Can view payments and financial billing", Group: "Payments"},
+		{Name: "payment:manage", Description: "Can manage billing — collect, edit, and delete invoices", Group: "Payments"},
 
 		// Reminders
 		{Name: "reminder:view", Description: "Can view and send reminders", Group: "Reminders"},
@@ -113,7 +114,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 	db.FirstOrCreate(&userRole, rbac.Role{Name: "User"})
 	if db.Model(&userRole).Association("Permissions").Count() == 0 {
 		var userPerms []rbac.Permission
-		db.Where("\"group\" IN ? OR name IN ?", []string{"Leads", "Clients", "Users"}, []string{"audit:view", "examtype:view", "appointment:view", "appointment:create", "availability:check", "subject:view", "subject:create", "payment:view", "reminder:view"}).Find(&userPerms)
+		db.Where("\"group\" IN ? OR name IN ?", []string{"Leads", "Clients", "Users"}, []string{"audit:view", "examtype:view", "appointment:view", "appointment:create", "availability:check", "subject:view", "subject:create", "payment:view", "payment:manage", "reminder:view"}).Find(&userPerms)
 		db.Model(&userRole).Association("Permissions").Replace(userPerms)
 	}
 

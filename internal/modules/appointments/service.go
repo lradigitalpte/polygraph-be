@@ -807,3 +807,70 @@ func (s *Service) CollectQuotationPayment(id string, amount float64) error {
 
 	return s.syncAppointmentFromQuotation(quote.ID)
 }
+
+type ConvertQuotationInput struct {
+	SubjectID   uint      `json:"subject_id"`
+	ExaminerID  uint      `json:"examiner_id"`
+	ScheduledAt time.Time `json:"scheduled_at"`
+	Duration    int       `json:"duration"`
+}
+
+// ConvertQuotationToAppointment turns a standalone quotation into a booked
+// appointment and links the existing quotation to it (so it becomes that booking's
+// invoice — no duplicate is created). The quoted amount carries over as the fee.
+func (s *Service) ConvertQuotationToAppointment(quotationID string, in ConvertQuotationInput) (*Appointment, error) {
+	var quote Quotation
+	if err := s.db.First(&quote, quotationID).Error; err != nil {
+		return nil, errors.New("quotation not found")
+	}
+	if quote.AppointmentID != nil {
+		return nil, errors.New("this quotation is already linked to a booking")
+	}
+	if in.Duration <= 0 {
+		in.Duration = 150
+	}
+
+	notes := quote.Title
+	if strings.TrimSpace(quote.Description) != "" {
+		notes = quote.Title + "\n\n" + quote.Description
+	}
+
+	appt := Appointment{
+		ClientID:        quote.ClientID,
+		SubjectID:       in.SubjectID,
+		ExaminerID:      in.ExaminerID,
+		ScheduledAt:     in.ScheduledAt,
+		Duration:        in.Duration,
+		ExamFee:         quote.Amount,
+		CollectedAmount: quote.CollectedAmount,
+		Status:          "confirmed",
+		PaymentStatus:   quoteStatusToPaymentStatus(quote.Status, quote.CollectedAmount, quote.Amount),
+		Notes:           notes,
+	}
+	// validateAppointment runs the Sunday/availability/overlap checks and sets defaults.
+	if err := s.validateAppointment(&appt); err != nil {
+		return nil, err
+	}
+	// Create directly (not via CreateAppointment) so we don't auto-generate a second
+	// invoice — we link the existing quotation below instead.
+	if err := s.db.Create(&appt).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&Quotation{}).Where("id = ?", quote.ID).Update("appointment_id", appt.ID).Error; err != nil {
+		return nil, err
+	}
+	return &appt, nil
+}
+
+// DeleteQuotation removes a quotation/invoice. The linked appointment (if any) is
+// left intact — only the billing record is removed.
+func (s *Service) DeleteQuotation(id string) error {
+	result := s.db.Delete(&Quotation{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("quotation not found")
+	}
+	return nil
+}

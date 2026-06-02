@@ -662,3 +662,33 @@ func (ctrl *Controller) CollectQuotationPayment(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Payment collected"})
 }
+
+func (ctrl *Controller) ConvertQuotation(c *gin.Context) {
+	var input ConvertQuotationInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	appt, err := ctrl.service.ConvertQuotationToAppointment(c.Param("id"), input)
+	if err != nil {
+		if err.Error() == "quotation not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, appt)
+}
+
+func (ctrl *Controller) DeleteQuotation(c *gin.Context) {
+	if err := ctrl.service.DeleteQuotation(c.Param("id")); err != nil {
+		if err.Error() == "quotation not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete invoice"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "invoice deleted"})
+}
