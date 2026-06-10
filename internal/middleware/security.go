@@ -10,15 +10,13 @@ import (
 	"github.com/unrolled/secure"
 )
 
-// SecureHeaders adds security headers to every response
+// SecureHeaders adds security headers to every response.
 func SecureHeaders() gin.HandlerFunc {
 	secureMiddleware := secure.New(secure.Options{
 		FrameDeny:             true,
 		ContentTypeNosniff:    true,
 		BrowserXssFilter:      true,
 		ContentSecurityPolicy: "default-src 'self'",
-		// In production, set this to true
-		// IsDevelopment: false,
 	})
 
 	return func(c *gin.Context) {
@@ -31,21 +29,44 @@ func SecureHeaders() gin.HandlerFunc {
 	}
 }
 
-// RateLimiter returns a rate limiting middleware
-// Default: 100 requests per minute per IP
+// RateLimiter returns a general-purpose rate limiter for authenticated API routes.
+// Allows 100 requests per minute per real client IP — enough for normal dashboard usage.
+//
+// WHY: Without this an attacker can hammer your API thousands of times per second,
+// scraping data or brute-forcing IDs. 100/min is generous for a real user but brutal
+// for automated attacks.
+//
+// WithTrustForwardHeader(true): behind a reverse proxy (Railway, Vercel, nginx) the
+// raw RemoteAddr is the *proxy's* IP, not the client's — and platforms like Railway
+// rotate across several edge IPs, so every request looked like a brand-new client and
+// the counter never accumulated. Trusting X-Forwarded-For keys the limiter on the real
+// client IP so the limit is actually enforced.
 func RateLimiter() gin.HandlerFunc {
-	// Define the rate (100 requests per minute)
-	rate := limiter.Rate{
+	store := memory.NewStore()
+	instance := limiter.New(store, limiter.Rate{
 		Period: 1 * time.Minute,
 		Limit:  100,
-	}
+	}, limiter.WithTrustForwardHeader(true))
+	return mgin.NewMiddleware(instance)
+}
 
-	// Use in-memory store (use Redis for production with multiple instances)
+// StrictRateLimiter returns a tight rate limiter for sensitive unauthenticated routes
+// such as public form submissions and any future auth-adjacent endpoints.
+// Allows 10 requests per minute per real client IP.
+//
+// WHY: Public endpoints don't require a session so they're the easiest targets.
+// 10/min stops automated abuse (form spam, enumeration) while being invisible to
+// real users who submit a form once every few seconds at most.
+//
+// NOTE: in-memory store is per-instance. If you scale the backend to more than one
+// Railway replica, move both limiters to a shared Redis store (ulule/limiter has a
+// redis driver) — otherwise each replica counts independently and the effective limit
+// becomes limit × replicas.
+func StrictRateLimiter() gin.HandlerFunc {
 	store := memory.NewStore()
-
-	// Create the limiter
-	instance := limiter.New(store, rate)
-
-	// Return the middleware
+	instance := limiter.New(store, limiter.Rate{
+		Period: 1 * time.Minute,
+		Limit:  10,
+	}, limiter.WithTrustForwardHeader(true))
 	return mgin.NewMiddleware(instance)
 }

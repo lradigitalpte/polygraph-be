@@ -40,9 +40,13 @@ func AllowedOrigins() []string {
 		add(raw)
 	}
 
-	// Always allow local Next.js dev servers.
-	add("http://localhost:3000")
-	add("http://localhost:3001")
+	// Allow local dev servers only outside of production.
+	// In production, all allowed origins must be explicitly set via env vars
+	// (CORS_ORIGINS, FRONTEND_URL, or APP_PUBLIC_URL) — no implicit localhost.
+	if os.Getenv("APP_ENV") != "production" {
+		add("http://localhost:3000")
+		add("http://localhost:3001")
+	}
 
 	return origins
 }

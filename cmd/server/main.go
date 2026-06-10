@@ -170,7 +170,9 @@ func main() {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization", "X-User-Email"},
+		// X-User-Email intentionally excluded — identity is derived from the verified
+		// session token only, never from a client-supplied identity header.
+		AllowHeaders: []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
@@ -183,8 +185,13 @@ func main() {
 		})
 	})
 
-	// Swagger documentation
-	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// Swagger documentation — gated behind ENABLE_SWAGGER so it is NOT publicly
+	// exposed in production. A public Swagger UI hands an attacker a full map of
+	// every endpoint, parameter, and model. Set ENABLE_SWAGGER=true only in dev.
+	if os.Getenv("ENABLE_SWAGGER") == "true" {
+		r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+		logger.Info("Swagger UI enabled at /swagger/index.html")
+	}
 
 	// Root endpoint
 	r.GET("/", func(c *gin.Context) {
@@ -236,8 +243,11 @@ func main() {
 	formsService := forms.NewService()
 	formsCtrl := forms.NewController(formsService)
 
-	// Public API (no auth) — client form fill links
+	// Public API (no auth) — client form fill links.
+	// StrictRateLimiter applied here because these routes have no session requirement,
+	// making them the easiest target for automated abuse (form spam, enumeration).
 	publicAPI := r.Group("/api/public")
+	publicAPI.Use(middleware.StrictRateLimiter())
 	forms.RegisterPublicRoutes(publicAPI, formsCtrl)
 
 	// API Routes

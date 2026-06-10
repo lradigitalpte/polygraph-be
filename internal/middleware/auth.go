@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +15,36 @@ import (
 	"my-app/internal/modules/auth"
 	"my-app/internal/modules/rbac"
 )
+
+// isEmailAllowed checks whether an email is permitted to access the system.
+//
+// WHY: Without this check, anyone who registers on the frontend gets auto-created
+// in the backend DB with a default "User" role — a foothold in your system.
+// This gate ensures only emails from approved domains (set via ALLOWED_EMAIL_DOMAINS)
+// or explicitly invited users can get a backend account.
+//
+// Set ALLOWED_EMAIL_DOMAINS=yourdomain.com,partner.com in your environment.
+// Leave it empty to allow all domains (open — not recommended for production).
+func isEmailAllowed(email string) bool {
+	domains := os.Getenv("ALLOWED_EMAIL_DOMAINS")
+	if domains == "" {
+		// No restriction configured — allow all (backwards-compatible default).
+		// Set ALLOWED_EMAIL_DOMAINS in production to lock this down.
+		return true
+	}
+	emailLower := strings.ToLower(strings.TrimSpace(email))
+	atIdx := strings.LastIndex(emailLower, "@")
+	if atIdx < 0 {
+		return false
+	}
+	emailDomain := emailLower[atIdx+1:]
+	for _, d := range strings.Split(domains, ",") {
+		if strings.TrimSpace(strings.ToLower(d)) == emailDomain {
+			return true
+		}
+	}
+	return false
+}
 
 type cachedAuthUser struct {
 	user      auth.User
@@ -136,7 +168,12 @@ func AuthMiddleware() gin.HandlerFunc {
 			v, err, _ := authSingleflight.Do(email, func() (interface{}, error) {
 				var u auth.User
 				if err := database.GetDB().Joins("Role").Where("users.email = ?", email).First(&u).Error; err != nil {
-					// Not found — auto-create (Just-In-Time provisioning)
+					// Not found — auto-create (Just-In-Time provisioning).
+					// Gate on domain allowlist before creating the account so
+					// arbitrary registrations can't get a backend foothold.
+					if !isEmailAllowed(email) {
+						return nil, fmt.Errorf("email domain not allowed: %s", email)
+					}
 					var defaultRole rbac.Role
 					database.GetDB().Where("name = ?", "User").FirstOrCreate(&defaultRole, rbac.Role{Name: "User", Description: "Default access"})
 					u = auth.User{Email: email, Name: email, RoleID: defaultRole.ID, Status: "active"}
