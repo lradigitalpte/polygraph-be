@@ -1,8 +1,12 @@
 package appointments
 
 import (
+	"crypto/subtle"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -206,7 +210,7 @@ func (ctrl *Controller) BulkCreateExaminees(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
-		"created": len(created),
+		"created":   len(created),
 		"examinees": created,
 	})
 }
@@ -376,7 +380,89 @@ func (ctrl *Controller) CreateAppointment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// Best-effort notifications. A mail failure must not fail the booking — the
+	// invoice can still be sent manually from billing.
+	_ = ctrl.service.EmailAppointmentConfirmation(appointment.ID)
+	_ = ctrl.service.EmailInvoiceForAppointment(appointment.ID)
 	c.JSON(http.StatusCreated, appointment)
+}
+
+// RunDueReminders is the cron endpoint: it sends pre-session reminder emails for
+// appointments due within `within_hours` (default 24). It is NOT behind session
+// auth — instead it requires a shared secret in the X-Cron-Secret header that
+// matches the CRON_SECRET env var. Designed to be hit on a schedule (cron-job.org).
+func (ctrl *Controller) RunDueReminders(c *gin.Context) {
+	secret := strings.TrimSpace(os.Getenv("CRON_SECRET"))
+	if secret == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "CRON_SECRET is not configured"})
+		return
+	}
+	provided := strings.TrimSpace(c.GetHeader("X-Cron-Secret"))
+	// Constant-time compare to avoid leaking the secret via timing.
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or missing cron secret"})
+		return
+	}
+
+	withinHours := 24
+	if raw := strings.TrimSpace(c.Query("within_hours")); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			withinHours = v
+		}
+	}
+
+	sent, err := ctrl.service.RunDueReminders(withinHours)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sent": sent, "within_hours": withinHours})
+}
+
+// BulkSchedule creates subjects (if new) and one appointment each in a single transaction.
+func (ctrl *Controller) BulkSchedule(c *gin.Context) {
+	var body struct {
+		ClientID    uint                `json:"client_id"    binding:"required"`
+		ExaminerID  uint                `json:"examiner_id"  binding:"required"`
+		ScheduledAt string              `json:"scheduled_at" binding:"required"`
+		Duration    int                 `json:"duration"`
+		ExamFee     float64             `json:"exam_fee"`
+		PaymentMode string              `json:"payment_mode"`
+		Notes       string              `json:"notes"`
+		Examinees   []BulkScheduleInput `json:"examinees"    binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	scheduledAt, err := time.Parse(time.RFC3339, body.ScheduledAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scheduled_at must be an RFC3339 timestamp (e.g. 2026-06-15T09:00:00Z)"})
+		return
+	}
+	if body.PaymentMode == "" {
+		body.PaymentMode = "Bank Transfer"
+	}
+
+	results, err := ctrl.service.BulkSchedule(
+		body.ClientID,
+		body.ExaminerID,
+		scheduledAt,
+		body.Duration,
+		body.ExamFee,
+		body.PaymentMode,
+		body.Notes,
+		body.Examinees,
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"scheduled": len(results),
+		"results":   results,
+	})
 }
 
 // GetAppointments godoc

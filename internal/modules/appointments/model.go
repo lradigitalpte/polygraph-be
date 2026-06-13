@@ -44,4 +44,7 @@ type Appointment struct {
 	QuestionsPrepared bool           `gorm:"default:false" json:"questions_prepared"`
 	Notes             string         `gorm:"type:text" json:"notes"`
 	ExamID            *uint          `json:"exam_id,omitempty"`
+	// RemindedAt is set when the automated pre-session reminder email is sent,
+	// so the cron job never reminds the same appointment twice.
+	RemindedAt *time.Time `json:"reminded_at,omitempty"`
 }

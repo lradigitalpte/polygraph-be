@@ -2,6 +2,7 @@ package appointments
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -13,10 +14,10 @@ import (
 
 // ExamineeRosterEntry is one examinee linked to a client account.
 type ExamineeRosterEntry struct {
-	Subject          subjects.Subject `json:"subject"`
-	SessionCount     int              `json:"session_count"`
-	CompletedCount   int              `json:"completed_count"`
-	LastScheduledAt  *time.Time       `json:"last_scheduled_at,omitempty"`
+	Subject         subjects.Subject `json:"subject"`
+	SessionCount    int              `json:"session_count"`
+	CompletedCount  int              `json:"completed_count"`
+	LastScheduledAt *time.Time       `json:"last_scheduled_at,omitempty"`
 }
 
 func (s *Service) GetClientExaminees(clientID string) ([]ExamineeRosterEntry, error) {
@@ -35,10 +36,10 @@ func (s *Service) GetClientExaminees(clientID string) ([]ExamineeRosterEntry, er
 	}
 
 	stats := make(map[uint]struct {
-		count      int
-		completed  int
-		last       time.Time
-		hasLast    bool
+		count     int
+		completed int
+		last      time.Time
+		hasLast   bool
 	})
 	for _, appt := range appointments {
 		st := stats[appt.SubjectID]
@@ -191,4 +192,128 @@ func (s *Service) BulkCreateExaminees(clientID string, inputs []bulkExamineeInpu
 	}
 
 	return created, nil
+}
+
+// BulkScheduleInput describes one examinee row in a batch intake request.
+type BulkScheduleInput struct {
+	// Existing subject — provide subject_id to skip creation.
+	SubjectID *uint `json:"subject_id"`
+	// New subject fields (used when subject_id is nil).
+	FirstName   string `json:"first_name"`
+	LastName    string `json:"last_name"`
+	Email       string `json:"email"`
+	Phone       string `json:"phone"`
+	EmployeeRef string `json:"employee_ref"`
+	// Per-examinee optional schedule offset in minutes from the batch start time.
+	// If 0 all examinees share the same ScheduledAt.
+	OffsetMinutes int `json:"offset_minutes"`
+}
+
+// BulkScheduleResult is the response for one examinee in the batch.
+type BulkScheduleResult struct {
+	Subject     subjects.Subject `json:"subject"`
+	Appointment Appointment      `json:"appointment"`
+}
+
+// BulkSchedule creates subjects (if new) and one appointment per examinee in a
+// single transaction. All appointments share client, examiner, duration, fee and
+// payment fields; each may optionally have a per-row time offset.
+func (s *Service) BulkSchedule(
+	clientID uint,
+	examinerID uint,
+	scheduledAt time.Time,
+	duration int,
+	examFee float64,
+	paymentMode string,
+	notes string,
+	rows []BulkScheduleInput,
+) ([]BulkScheduleResult, error) {
+	if _, err := s.GetClientByID(strconv.FormatUint(uint64(clientID), 10)); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, errors.New("at least one examinee is required")
+	}
+	if duration <= 0 {
+		duration = 60
+	}
+
+	subjectSvc := subjects.NewService()
+	results := make([]BulkScheduleResult, 0, len(rows))
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		txSvc := &Service{db: tx, storage: s.storage}
+
+		for i, row := range rows {
+			var subj subjects.Subject
+
+			if row.SubjectID != nil && *row.SubjectID > 0 {
+				// Use existing subject.
+				found, err := subjectSvc.GetByID(strconv.FormatUint(uint64(*row.SubjectID), 10))
+				if err != nil {
+					return fmt.Errorf("row %d: subject %d not found", i+1, *row.SubjectID)
+				}
+				subj = *found
+			} else {
+				// Create new subject.
+				first := strings.TrimSpace(row.FirstName)
+				last := strings.TrimSpace(row.LastName)
+				if first == "" && last == "" {
+					continue // skip blank rows silently
+				}
+				if first == "" {
+					first = "Examinee"
+				}
+				if last == "" {
+					last = "Record"
+				}
+				subj = subjects.Subject{
+					ClientID:    &clientID,
+					FirstName:   first,
+					LastName:    last,
+					Email:       strings.TrimSpace(row.Email),
+					Phone:       strings.TrimSpace(row.Phone),
+					EmployeeRef: strings.TrimSpace(row.EmployeeRef),
+				}
+				if err := tx.Create(&subj).Error; err != nil {
+					return fmt.Errorf("row %d: failed to create subject: %w", i+1, err)
+				}
+			}
+
+			apptTime := scheduledAt.Add(time.Duration(row.OffsetMinutes) * time.Minute)
+			appt := Appointment{
+				ClientID:      clientID,
+				SubjectID:     subj.ID,
+				ExaminerID:    examinerID,
+				ScheduledAt:   apptTime,
+				Duration:      duration,
+				ExamFee:       examFee,
+				PaymentMode:   paymentMode,
+				PaymentStatus: "Unpaid",
+				Status:        "pending",
+				Notes:         notes,
+			}
+			if err := txSvc.CreateAppointment(&appt); err != nil {
+				return fmt.Errorf("row %d (%s %s): %w", i+1, subj.FirstName, subj.LastName, err)
+			}
+
+			results = append(results, BulkScheduleResult{Subject: subj, Appointment: appt})
+		}
+
+		if len(results) == 0 {
+			return errors.New("no valid examinee rows to schedule")
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Notify each scheduled examinee (best-effort, after commit so a mail failure
+	// never rolls back the batch). Examinees without an email are skipped inside.
+	for _, r := range results {
+		_ = s.EmailAppointmentConfirmation(r.Appointment.ID)
+	}
+
+	return results, nil
 }

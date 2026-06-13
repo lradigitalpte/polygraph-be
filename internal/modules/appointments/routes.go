@@ -28,6 +28,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 	{
 		a.GET("", permissionMiddleware("appointment:view"), ctrl.GetAppointments)
 		a.POST("", permissionMiddleware("appointment:create"), ctrl.CreateAppointment)
+		a.POST("/bulk-schedule", permissionMiddleware("appointment:create"), ctrl.BulkSchedule)
 		a.GET("/:id", permissionMiddleware("appointment:view"), ctrl.GetAppointment)
 		a.PATCH("/:id", permissionMiddleware("appointment:manage"), ctrl.UpdateAppointment)
 		a.DELETE("/:id", permissionMiddleware("appointment:manage"), ctrl.DeleteAppointment)

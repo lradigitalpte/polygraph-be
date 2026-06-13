@@ -27,7 +27,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 
 	// Migrate the schemas
-	err = db.AutoMigrate(&rbac.Role{}, &auth.User{}, &subjects.Subject{}, &availability.Block{}, &Client{}, &Appointment{})
+	err = db.AutoMigrate(&rbac.Role{}, &auth.User{}, &subjects.Subject{}, &availability.Block{}, &Client{}, &Appointment{}, &Quotation{})
 	require.NoError(t, err)
 
 	return db
@@ -47,6 +47,17 @@ func seedBookableExaminer(t *testing.T, db *gorm.DB) auth.User {
 	}
 	require.NoError(t, db.Create(&user).Error)
 	return user
+}
+
+// bookableTime returns a future timestamp that is not a Sunday, since
+// validateAppointment rejects Sunday bookings. Without this, the suite fails
+// whenever "now + 24h" happens to land on a Sunday (e.g. when run on a Saturday).
+func bookableTime() time.Time {
+	t := time.Now().Add(24 * time.Hour)
+	for t.UTC().Weekday() == time.Sunday {
+		t = t.Add(24 * time.Hour)
+	}
+	return t
 }
 
 func seedSubject(t *testing.T, db *gorm.DB) subjects.Subject {
@@ -105,7 +116,7 @@ func TestService_CreateAndGetAllAppointments(t *testing.T) {
 	examiner := seedBookableExaminer(t, db)
 	subject := seedSubject(t, db)
 
-	scheduledAt := time.Now().Add(24 * time.Hour)
+	scheduledAt := bookableTime()
 	app := &Appointment{
 		ClientID:    client.ID,
 		SubjectID:   subject.ID,
@@ -140,7 +151,7 @@ func TestService_UpdateStatus(t *testing.T) {
 		ClientID:    client.ID,
 		SubjectID:   subject.ID,
 		ExaminerID:  examiner.ID,
-		ScheduledAt: time.Now().Add(24 * time.Hour),
+		ScheduledAt: bookableTime(),
 		Duration:    90,
 		Status:      "pending",
 	}

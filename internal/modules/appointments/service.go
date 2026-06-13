@@ -490,6 +490,194 @@ func formatAppointmentCode(id uint) string {
 	return fmt.Sprintf("APT-%04d", id)
 }
 
+// EmailAppointmentConfirmation emails the examinee that their session has been
+// scheduled, with the date/time and examiner. Best-effort: returns nil (no-op)
+// when there is no usable recipient email, so booking flows can ignore the result.
+func (s *Service) EmailAppointmentConfirmation(apptID uint) error {
+	var appt Appointment
+	if err := s.db.Preload("Client").First(&appt, apptID).Error; err != nil {
+		return err
+	}
+
+	// Prefer the examinee's own email; fall back to the client/organisation email.
+	var subj subjects.Subject
+	_ = s.db.First(&subj, appt.SubjectID).Error
+	recipientName := strings.TrimSpace(subj.FirstName + " " + subj.LastName)
+	toEmail := strings.TrimSpace(subj.Email)
+	if toEmail == "" {
+		toEmail = strings.TrimSpace(appt.Client.Email)
+		if recipientName == "" {
+			recipientName = appt.Client.Name
+		}
+	}
+	if toEmail == "" || !strings.Contains(toEmail, "@") {
+		return nil // no one to notify — skip
+	}
+	if recipientName == "" {
+		recipientName = "there"
+	}
+
+	var examiner auth.User
+	examinerName := "your examiner"
+	if err := s.db.First(&examiner, appt.ExaminerID).Error; err == nil && strings.TrimSpace(examiner.Name) != "" {
+		examinerName = examiner.Name
+	}
+
+	when := appt.ScheduledAt.Format("Monday, 2 January 2006 at 15:04")
+	subject := fmt.Sprintf("Your polygraph session is scheduled — %s", formatAppointmentCode(appt.ID))
+	body := fmt.Sprintf(
+		"Hello %s,\n\nYour polygraph examination has been scheduled. Here are the details:\n\nReference: %s\nDate & time: %s\nDuration: %d minutes\nExaminer: %s\n\nPlease arrive 15 minutes early and bring valid photo ID. If you need to reschedule, reply to this email or contact our office.\n\nThank you,\nPolygraph Forensic System",
+		recipientName,
+		formatAppointmentCode(appt.ID),
+		when,
+		appt.Duration,
+		examinerName,
+	)
+
+	return sendSMTPMail(toEmail, subject, body)
+}
+
+// EmailAppointmentReminder emails the examinee a pre-session reminder.
+// Best-effort: returns nil (no-op) when there is no usable recipient email.
+func (s *Service) EmailAppointmentReminder(apptID uint) error {
+	var appt Appointment
+	if err := s.db.Preload("Client").First(&appt, apptID).Error; err != nil {
+		return err
+	}
+
+	var subj subjects.Subject
+	_ = s.db.First(&subj, appt.SubjectID).Error
+	recipientName := strings.TrimSpace(subj.FirstName + " " + subj.LastName)
+	toEmail := strings.TrimSpace(subj.Email)
+	if toEmail == "" {
+		toEmail = strings.TrimSpace(appt.Client.Email)
+		if recipientName == "" {
+			recipientName = appt.Client.Name
+		}
+	}
+	if toEmail == "" || !strings.Contains(toEmail, "@") {
+		return nil
+	}
+	if recipientName == "" {
+		recipientName = "there"
+	}
+
+	var examiner auth.User
+	examinerName := "your examiner"
+	if err := s.db.First(&examiner, appt.ExaminerID).Error; err == nil && strings.TrimSpace(examiner.Name) != "" {
+		examinerName = examiner.Name
+	}
+
+	when := appt.ScheduledAt.Format("Monday, 2 January 2006 at 15:04")
+	subject := fmt.Sprintf("Reminder: your polygraph session — %s", formatAppointmentCode(appt.ID))
+	body := fmt.Sprintf(
+		"Hello %s,\n\nThis is a reminder of your upcoming polygraph examination.\n\nReference: %s\nDate & time: %s\nDuration: %d minutes\nExaminer: %s\n\nPlease arrive 15 minutes early, bring valid photo ID, and avoid caffeine for 4 hours before the session. Reply to this email if you need to reschedule.\n\nThank you,\nPolygraph Forensic System",
+		recipientName,
+		formatAppointmentCode(appt.ID),
+		when,
+		appt.Duration,
+		examinerName,
+	)
+
+	return sendSMTPMail(toEmail, subject, body)
+}
+
+// RunDueReminders sends a one-time reminder for every non-cancelled, non-completed
+// appointment scheduled within the next withinHours that has not been reminded yet.
+// It is safe to call repeatedly (e.g. hourly from cron): RemindedAt dedupes sends.
+// Returns the number of reminders successfully sent.
+func (s *Service) RunDueReminders(withinHours int) (int, error) {
+	if withinHours <= 0 {
+		withinHours = 24
+	}
+	now := time.Now().UTC()
+	cutoff := now.Add(time.Duration(withinHours) * time.Hour)
+
+	var due []Appointment
+	err := s.db.
+		Where("reminded_at IS NULL").
+		Where("status NOT IN ?", []string{"cancelled", "completed"}).
+		Where("scheduled_at > ? AND scheduled_at <= ?", now, cutoff).
+		Find(&due).Error
+	if err != nil {
+		return 0, err
+	}
+
+	sent := 0
+	for _, appt := range due {
+		if mailErr := s.EmailAppointmentReminder(appt.ID); mailErr != nil {
+			// Skip marking on failure so the next run retries this one.
+			continue
+		}
+		stamp := time.Now().UTC()
+		if updErr := s.db.Model(&Appointment{}).Where("id = ?", appt.ID).
+			Update("reminded_at", &stamp).Error; updErr != nil {
+			continue
+		}
+		sent++
+	}
+	return sent, nil
+}
+
+// EmailInvoiceForAppointment emails the invoice/quotation generated for an
+// appointment to the client. Best-effort: returns nil (no-op) when there is no
+// fee or no valid client email, so callers can ignore the result on booking.
+func (s *Service) EmailInvoiceForAppointment(apptID uint) error {
+	var appt Appointment
+	if err := s.db.Preload("Client").First(&appt, apptID).Error; err != nil {
+		return err
+	}
+
+	toEmail := strings.TrimSpace(appt.Client.Email)
+	if toEmail == "" || !strings.Contains(toEmail, "@") {
+		return nil // nothing to send to — skip silently
+	}
+	if appt.ExamFee <= 0 {
+		return nil // no charge, no invoice to send
+	}
+
+	// Find the invoice generated for this appointment.
+	var quote Quotation
+	if err := s.db.Where("appointment_id = ?", apptID).First(&quote).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // no invoice was created (e.g. zero fee) — skip
+		}
+		return err
+	}
+
+	balance := appt.ExamFee - appt.CollectedAmount
+	if balance < 0 {
+		balance = 0
+	}
+
+	subject := fmt.Sprintf("Invoice %s — Polygraph Forensic System", quote.Code)
+	body := fmt.Sprintf(
+		"Hello %s,\n\nThank you for booking your polygraph session (%s). Please find your invoice details below.\n\nInvoice: %s\nDescription: %s\nTotal: $%.2f\nPaid to date: $%.2f\nBalance due: $%.2f\nPayment method: %s\n\nPlease arrange payment ahead of your appointment. Reply to this email if you have any questions.\n\nThank you,\nPolygraph Forensic System",
+		appt.Client.Name,
+		formatAppointmentCode(appt.ID),
+		quote.Code,
+		quote.Title,
+		appt.ExamFee,
+		appt.CollectedAmount,
+		balance,
+		appt.PaymentMode,
+	)
+
+	if err := sendSMTPMail(toEmail, subject, body); err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	_ = s.db.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(map[string]interface{}{
+		"sent_to_email": toEmail,
+		"email_subject": subject,
+		"email_body":    body,
+		"sent_at":       now,
+		"status":        "Sent",
+	}).Error
+	return nil
+}
+
 func (s *Service) GetClientAccount(clientID string) ([]AccountLedgerEntry, AccountSummary, error) {
 	var client Client
 	if err := s.db.First(&client, clientID).Error; err != nil {
@@ -762,6 +950,10 @@ func sendSMTPMail(toEmail string, subject string, body string) error {
 		from = "noreply@polygraph.local"
 	}
 
+	// Strip CR/LF from header-bound values to prevent SMTP header/command
+	// injection (gosec G707). The body may legitimately contain newlines.
+	subject = sanitizeHeader(subject)
+	toEmail = sanitizeHeader(toEmail)
 	addr := host + ":" + port
 	message := []byte("Subject: " + subject + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
@@ -775,10 +967,18 @@ func sendSMTPMail(toEmail string, subject string, body string) error {
 		auth = smtp.PlainAuth("", user, pass, host)
 	}
 
+	// #nosec G707 -- subject and recipient are CRLF-stripped via sanitizeHeader;
+	// the body sits after the header separator and cannot inject SMTP headers.
 	if err := smtp.SendMail(addr, auth, from, []string{toEmail}, message); err != nil {
 		return fmt.Errorf("failed to send quotation email: %w", err)
 	}
 	return nil
+}
+
+// sanitizeHeader removes CR/LF so attacker-influenced values cannot inject
+// additional SMTP headers or commands.
+func sanitizeHeader(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 func (s *Service) CollectQuotationPayment(id string, amount float64) error {

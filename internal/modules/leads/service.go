@@ -60,7 +60,7 @@ func (s *Service) Create(input *CreateLeadInput) (*Lead, error) {
 // GetAll returns every lead ordered by most recently created first.
 func (s *Service) GetAll() ([]Lead, error) {
 	var leads []Lead
-	err := s.db.Order("created_at desc").Find(&leads).Error
+	err := s.db.Order("created_at desc, id desc").Find(&leads).Error
 	return leads, err
 }
 

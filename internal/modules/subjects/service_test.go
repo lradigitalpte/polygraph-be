@@ -46,7 +46,7 @@ func TestService_CreateAndGet(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotZero(t, subj.ID)
 
-	all, err := s.GetAll()
+	all, err := s.GetAll("", "")
 	assert.NoError(t, err)
 	assert.Len(t, all, 1)
 	assert.Equal(t, "Jane", all[0].FirstName)
@@ -71,7 +71,7 @@ func TestService_CreateAllowsBlankIDNumber(t *testing.T) {
 	err = s.Create(second)
 	assert.NoError(t, err)
 
-	all, err := s.GetAll()
+	all, err := s.GetAll("", "")
 	assert.NoError(t, err)
 	assert.Len(t, all, 2)
 }

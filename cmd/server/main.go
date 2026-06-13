@@ -42,6 +42,7 @@ import (
 	"my-app/internal/modules/availability"
 	"my-app/internal/modules/exams"
 	"my-app/internal/modules/forms"
+	"my-app/internal/modules/intake"
 	"my-app/internal/modules/leads"
 	"my-app/internal/modules/rbac"
 	"my-app/internal/modules/settings"
@@ -114,6 +115,7 @@ func main() {
 		&leads.Lead{},
 		&forms.FormTemplate{},
 		&forms.FormRequest{},
+		&intake.IntakeRequest{},
 		&settings.OrganizationSettings{},
 	)
 	if err != nil {
@@ -168,11 +170,11 @@ func main() {
 	allowedOrigins := middleware.AllowedOrigins()
 	logger.Info("CORS allowed origins", zap.Strings("origins", allowedOrigins))
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     allowedOrigins,
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+		AllowOrigins: allowedOrigins,
+		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		// X-User-Email intentionally excluded — identity is derived from the verified
 		// session token only, never from a client-supplied identity header.
-		AllowHeaders: []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 	}))
@@ -250,10 +252,19 @@ func main() {
 	publicAPI.Use(middleware.StrictRateLimiter())
 	forms.RegisterPublicRoutes(publicAPI, formsCtrl)
 
+	intakeService := intake.NewService()
+	intakeCtrl := intake.NewController(intakeService)
+	intake.RegisterPublicRoutes(publicAPI, intakeCtrl)
+
+	// Cron endpoint (no session auth; guarded by the X-Cron-Secret header inside
+	// the handler). Hit on a schedule by an external scheduler (cron-job.org) to
+	// send pre-session reminder emails.
+	r.POST("/api/cron/run-reminders", appCtrl.RunDueReminders)
+
 	// API Routes
 	api := r.Group("/api")
-	api.Use(middleware.AuthMiddleware())  // Protect all /api routes
-	api.Use(middleware.Deduplicate())     // Prevent accidental double-submits (idempotency)
+	api.Use(middleware.AuthMiddleware()) // Protect all /api routes
+	api.Use(middleware.Deduplicate())    // Prevent accidental double-submits (idempotency)
 	{
 		// Register Modular Routes
 		rbac.RegisterRoutes(api, rbacCtrl)
@@ -266,12 +277,18 @@ func main() {
 		leads.RegisterRoutes(api, leadCtrl, middleware.PermissionMiddleware)
 		auditlogs.RegisterRoutes(api, auditCtrl, middleware.PermissionMiddleware)
 		forms.RegisterRoutes(api, formsCtrl, middleware.PermissionMiddleware)
+		intake.RegisterRoutes(api, intakeCtrl, middleware.PermissionMiddleware)
 	}
 
-	// Setup server
+	// Setup server. Timeouts guard against slow-client (Slowloris) attacks
+	// where a connection trickles headers/body to exhaust server resources.
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: r,
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Start server in a goroutine

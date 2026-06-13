@@ -2,6 +2,8 @@ module my-app
 
 go 1.26.0
 
+toolchain go1.26.4
+
 require (
 	github.com/MicahParks/keyfunc/v2 v2.1.0
 	github.com/gin-contrib/cors v1.7.7
