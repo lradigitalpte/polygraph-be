@@ -195,6 +195,12 @@ func (s *Service) UploadDocument(ctx context.Context, examID uint, fileName stri
 func (s *Service) GetDocuments(examID string) ([]Document, error) {
 	var docs []Document
 	err := s.db.Where("exam_id = ?", examID).Find(&docs).Error
+	if err == nil {
+		ctx := context.Background()
+		for i := range docs {
+			docs[i].URL = storage.SignedURLForStored(ctx, s.storage, docs[i].URL)
+		}
+	}
 	return docs, err
 }
 

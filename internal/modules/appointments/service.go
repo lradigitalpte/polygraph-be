@@ -160,6 +160,12 @@ func (s *Service) GetAllAppointments(clientID ...string) ([]Appointment, error) 
 func (s *Service) GetClientDocuments(clientID string) ([]ClientDocument, error) {
 	var docs []ClientDocument
 	err := s.db.Where("client_id = ?", clientID).Order("created_at DESC").Find(&docs).Error
+	if err == nil {
+		ctx := context.Background()
+		for i := range docs {
+			docs[i].URL = storage.SignedURLForStored(ctx, s.storage, docs[i].URL)
+		}
+	}
 	return docs, err
 }
 
@@ -244,6 +250,12 @@ func (s *Service) CreateClientFormDocument(clientID uint, name, docType string, 
 func (s *Service) GetSubjectDocuments(subjectID string) ([]SubjectDocument, error) {
 	var docs []SubjectDocument
 	err := s.db.Where("subject_id = ?", subjectID).Order("created_at DESC").Find(&docs).Error
+	if err == nil {
+		ctx := context.Background()
+		for i := range docs {
+			docs[i].URL = storage.SignedURLForStored(ctx, s.storage, docs[i].URL)
+		}
+	}
 	return docs, err
 }
 
@@ -299,6 +311,165 @@ func (s *Service) UploadSubjectDocument(ctx context.Context, subjectID uint, fil
 		return nil, err
 	}
 	return &doc, nil
+}
+
+// ─── Document sharing (one-way: send a stored file to the client) ────────────
+
+// CreateDocumentShare emails the client a tokenised link to view/download an
+// already-uploaded document. scope is "client" or "subject".
+func (s *Service) CreateDocumentShare(
+	scope string,
+	clientID uint,
+	subjectID *uint,
+	documentID uint,
+	recipientEmail, recipientName, sentByEmail string,
+) (*DocumentShare, error) {
+	scope = strings.TrimSpace(scope)
+
+	var (
+		name string
+		url  string
+	)
+	switch scope {
+	case "subject":
+		var doc SubjectDocument
+		if err := s.db.First(&doc, documentID).Error; err != nil {
+			return nil, errors.New("document not found")
+		}
+		name, url = doc.Name, doc.URL
+		clientID = doc.ClientID
+		sid := doc.SubjectID
+		subjectID = &sid
+	case "client":
+		var doc ClientDocument
+		if err := s.db.First(&doc, documentID).Error; err != nil {
+			return nil, errors.New("document not found")
+		}
+		name, url = doc.Name, doc.URL
+		clientID = doc.ClientID
+		subjectID = nil
+	default:
+		return nil, errors.New("scope must be 'client' or 'subject'")
+	}
+
+	if strings.TrimSpace(url) == "" {
+		return nil, errors.New("this document has no file to send")
+	}
+
+	client, err := s.GetClientByID(strconv.FormatUint(uint64(clientID), 10))
+	if err != nil {
+		return nil, errors.New("client not found")
+	}
+
+	toEmail := strings.TrimSpace(recipientEmail)
+	if toEmail == "" {
+		toEmail = strings.TrimSpace(client.Email)
+	}
+	if toEmail == "" || !strings.Contains(toEmail, "@") {
+		return nil, errors.New("a valid recipient email is required")
+	}
+
+	rname := strings.TrimSpace(recipientName)
+	if rname == "" {
+		rname = client.Name
+	}
+
+	token, err := generateShareToken()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	share := DocumentShare{
+		Token:          token,
+		ClientID:       clientID,
+		SubjectID:      subjectID,
+		Scope:          scope,
+		DocumentID:     documentID,
+		Name:           name,
+		URL:            url,
+		RecipientEmail: toEmail,
+		RecipientName:  rname,
+		Status:         "sent",
+		SentAt:         now,
+		ExpiresAt:      now.Add(14 * 24 * time.Hour),
+		SentByEmail:    strings.TrimSpace(sentByEmail),
+	}
+	if err := s.db.Create(&share).Error; err != nil {
+		return nil, err
+	}
+
+	if mailErr := s.sendDocumentShareEmail(&share); mailErr != nil {
+		// Keep the share — staff can resend or copy the link manually.
+		return &share, fmt.Errorf("document share created but email failed: %w", mailErr)
+	}
+	return &share, nil
+}
+
+func (s *Service) sendDocumentShareEmail(share *DocumentShare) error {
+	link := publicShareURL(share.Token)
+	subject := fmt.Sprintf("A document has been shared with you — %s", share.Name)
+	body := fmt.Sprintf(
+		"Hello %s,\n\nPolygraph Forensic System has shared a document with you:\n\n%s\n\nYou can view or download it securely using the link below. The link expires on %s.\n\n%s\n\nThank you,\nPolygraph Forensic System",
+		share.RecipientName,
+		share.Name,
+		share.ExpiresAt.Format("January 2, 2006"),
+		link,
+	)
+	return email.Send(share.RecipientEmail, subject, body)
+}
+
+// GetPublicDocumentShare resolves a share by token and marks it viewed on first open.
+func (s *Service) GetPublicDocumentShare(token string) (*DocumentShare, error) {
+	var share DocumentShare
+	if err := s.db.Where("token = ?", token).First(&share).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("shared document not found")
+		}
+		return nil, err
+	}
+	if time.Now().UTC().After(share.ExpiresAt) {
+		return nil, errors.New("this link has expired")
+	}
+	if share.Status == "sent" {
+		now := time.Now().UTC()
+		share.Status = "viewed"
+		share.ViewedAt = &now
+		_ = s.db.Model(&share).Updates(map[string]interface{}{"status": "viewed", "viewed_at": now}).Error
+	}
+	// Hand the recipient a short-lived presigned URL rather than the private object URL.
+	share.URL = storage.SignedURLForStored(context.Background(), s.storage, share.URL)
+	return &share, nil
+}
+
+// ListDocumentShares returns shares for a client or a subject, newest first.
+func (s *Service) ListDocumentShares(clientID, subjectID string) ([]DocumentShare, error) {
+	var shares []DocumentShare
+	q := s.db.Order("created_at DESC")
+	if trimmed := strings.TrimSpace(subjectID); trimmed != "" {
+		q = q.Where("subject_id = ?", trimmed)
+	} else if trimmed := strings.TrimSpace(clientID); trimmed != "" {
+		q = q.Where("client_id = ?", trimmed)
+	}
+	return shares, q.Find(&shares).Error
+}
+
+// ResendDocumentShare re-emails an existing, non-expired share link.
+func (s *Service) ResendDocumentShare(id string) (*DocumentShare, error) {
+	var share DocumentShare
+	if err := s.db.First(&share, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("document share not found")
+		}
+		return nil, err
+	}
+	if time.Now().UTC().After(share.ExpiresAt) {
+		return nil, errors.New("this link has expired; send the document again")
+	}
+	if err := s.sendDocumentShareEmail(&share); err != nil {
+		return nil, err
+	}
+	return &share, nil
 }
 
 func (s *Service) GetAppointmentByID(id string) (*Appointment, error) {

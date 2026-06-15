@@ -778,3 +778,78 @@ func (ctrl *Controller) DeleteQuotation(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "invoice deleted"})
 }
+
+// ─── Document sharing ────────────────────────────────────────────────────────
+
+func (ctrl *Controller) CreateDocumentShare(c *gin.Context) {
+	var input struct {
+		Scope          string `json:"scope" binding:"required"`
+		ClientID       uint   `json:"client_id"`
+		SubjectID      *uint  `json:"subject_id"`
+		DocumentID     uint   `json:"document_id" binding:"required"`
+		RecipientEmail string `json:"recipient_email"`
+		RecipientName  string `json:"recipient_name"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	sentBy := ""
+	if v, ok := c.Get("user_email"); ok {
+		sentBy, _ = v.(string)
+	}
+
+	share, err := ctrl.service.CreateDocumentShare(
+		input.Scope, input.ClientID, input.SubjectID, input.DocumentID,
+		input.RecipientEmail, input.RecipientName, sentBy,
+	)
+	if err != nil {
+		// If the record was created but email failed, still return it with a warning.
+		if share != nil {
+			c.JSON(http.StatusCreated, gin.H{"share": share, "warning": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, share)
+}
+
+func (ctrl *Controller) ListDocumentShares(c *gin.Context) {
+	shares, err := ctrl.service.ListDocumentShares(c.Query("client_id"), c.Query("subject_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load document shares"})
+		return
+	}
+	c.JSON(http.StatusOK, shares)
+}
+
+func (ctrl *Controller) ResendDocumentShare(c *gin.Context) {
+	share, err := ctrl.service.ResendDocumentShare(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, share)
+}
+
+// GetPublicDocumentShare is unauthenticated — it serves the recipient's view page.
+func (ctrl *Controller) GetPublicDocumentShare(c *gin.Context) {
+	share, err := ctrl.service.GetPublicDocumentShare(c.Param("token"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "shared document not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"name":           share.Name,
+		"url":            share.URL,
+		"status":         share.Status,
+		"recipient_name": share.RecipientName,
+		"expires_at":     share.ExpiresAt,
+	})
+}

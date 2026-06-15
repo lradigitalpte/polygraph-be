@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -85,11 +86,17 @@ func (s *S3Storage) DeleteFile(ctx context.Context, key string) error {
 	return err
 }
 
-// GetSignedURL generates a presigned URL for reading a file
-// Note: You need the presign package imported for this to work natively.
+// GetSignedURL generates a short-lived presigned URL for reading a private object.
+// This lets the browser fetch the file directly from S3 without the bucket being
+// public — the signature in the query string authorises the single GET.
 func (s *S3Storage) GetSignedURL(ctx context.Context, key string) (string, error) {
-	// For production, you actually instantiate s3.NewPresignClient(client)
-	// I'll return the public URL for now if it's not private.
-	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", s.bucket, s.region, key)
-	return url, nil
+	presigner := s3.NewPresignClient(s.client)
+	req, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(15*time.Minute))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign url: %w", err)
+	}
+	return req.URL, nil
 }

@@ -102,6 +102,7 @@ func main() {
 		&appointments.Appointment{},
 		&appointments.ClientDocument{},
 		&appointments.SubjectDocument{},
+		&appointments.DocumentShare{},
 		&appointments.Quotation{},
 		&availability.Block{},
 		&exams.ExamType{},
@@ -255,6 +256,9 @@ func main() {
 	intakeService := intake.NewService()
 	intakeCtrl := intake.NewController(intakeService)
 	intake.RegisterPublicRoutes(publicAPI, intakeCtrl)
+
+	// Public document-view links (clients open these to download files sent to them).
+	appointments.RegisterPublicRoutes(publicAPI, appCtrl)
 
 	// Cron endpoint (no session auth; guarded by the X-Cron-Secret header inside
 	// the handler). Hit on a schedule by an external scheduler (cron-job.org) to

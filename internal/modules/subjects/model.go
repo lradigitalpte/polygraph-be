@@ -36,6 +36,11 @@ type Subject struct {
 	Nationality     string `gorm:"size:100" json:"nationality"`
 	SpokenLanguage  string `gorm:"size:100" json:"spoken_language"`
 	WrittenLanguage string `gorm:"size:100" json:"written_language"`
+	// EnglishProficiency captures how well the examinee speaks and understands English
+	// (Native, Fluent, Conversational, Basic, None) so the examiner knows whether the
+	// test can be conducted in English. InterpreterRequired flags when a translator is needed.
+	EnglishProficiency  string `gorm:"size:50" json:"english_proficiency"`
+	InterpreterRequired bool   `gorm:"default:false" json:"interpreter_required"`
 	// Encrypted storage for PII (DOB, IDNumber)
 	EncryptedDetails string `gorm:"type:text;not null" json:"-"`
 }

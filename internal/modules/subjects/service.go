@@ -93,6 +93,8 @@ func (s *Service) Update(id string, input *Subject) error {
 	existing.EmployeeRef = strings.TrimSpace(input.EmployeeRef)
 	existing.SpokenLanguage = strings.TrimSpace(input.SpokenLanguage)
 	existing.WrittenLanguage = strings.TrimSpace(input.WrittenLanguage)
+	existing.EnglishProficiency = strings.TrimSpace(input.EnglishProficiency)
+	existing.InterpreterRequired = input.InterpreterRequired
 	if input.IDNumber != "" || input.DateOfBirth != nil {
 		existing.IDNumber = input.IDNumber
 		existing.DateOfBirth = input.DateOfBirth

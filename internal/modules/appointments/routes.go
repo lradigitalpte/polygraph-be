@@ -60,4 +60,21 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		q.POST("/:id/convert", permissionMiddleware("appointment:create"), ctrl.ConvertQuotation)
 		q.DELETE("/:id", permissionMiddleware("payment:manage"), ctrl.DeleteQuotation)
 	}
+
+	ds := router.Group("/document-shares")
+	{
+		ds.POST("", permissionMiddleware("document:manage"), ctrl.CreateDocumentShare)
+		ds.GET("", permissionMiddleware("client:view"), ctrl.ListDocumentShares)
+		ds.POST("/:id/resend", permissionMiddleware("document:manage"), ctrl.ResendDocumentShare)
+	}
+}
+
+// RegisterPublicRoutes mounts the unauthenticated document-view endpoint. The
+// caller passes the already-"/api/public" group, so this group must be just
+// "/shared-docs" (not "/public/shared-docs") to avoid a doubled path prefix.
+func RegisterPublicRoutes(router *gin.RouterGroup, ctrl *Controller) {
+	p := router.Group("/shared-docs")
+	{
+		p.GET("/:token", ctrl.GetPublicDocumentShare)
+	}
 }

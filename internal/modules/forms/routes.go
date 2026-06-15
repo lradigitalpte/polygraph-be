@@ -23,8 +23,11 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 	}
 }
 
+// RegisterPublicRoutes mounts the public form-fill endpoints. The caller passes the
+// already-"/api/public" group, so this group must be just "/forms" — otherwise the path
+// doubles up to /api/public/public/forms and the emailed link 404s.
 func RegisterPublicRoutes(router *gin.RouterGroup, ctrl *Controller) {
-	p := router.Group("/public/forms")
+	p := router.Group("/forms")
 	{
 		p.GET("/:token", ctrl.GetPublicForm)
 		p.POST("/:token", ctrl.SubmitPublicForm)

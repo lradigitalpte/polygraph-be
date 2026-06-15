@@ -151,6 +151,7 @@ func (s *Service) SubmitIntakeRequest(token string, rows []SubjectInput, agreed 
 	}
 
 	created := make([]subjects.Subject, 0, len(rows))
+	snapshot := make([]SubmittedExaminee, 0, len(rows))
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		for i, row := range rows {
@@ -166,27 +167,43 @@ func (s *Service) SubmitIntakeRequest(token string, rows []SubjectInput, agreed 
 				last = "Record"
 			}
 			subj := subjects.Subject{
-				ClientID:    &req.ClientID,
-				FirstName:   first,
-				LastName:    last,
-				Email:       strings.TrimSpace(row.Email),
-				Phone:       strings.TrimSpace(row.Phone),
-				EmployeeRef: strings.TrimSpace(row.EmployeeRef),
-				Nationality: strings.TrimSpace(row.Nationality),
-				Gender:      strings.TrimSpace(row.Gender),
+				ClientID:            &req.ClientID,
+				FirstName:           first,
+				LastName:            last,
+				Email:               strings.TrimSpace(row.Email),
+				Phone:               strings.TrimSpace(row.Phone),
+				EmployeeRef:         strings.TrimSpace(row.EmployeeRef),
+				Nationality:         strings.TrimSpace(row.Nationality),
+				Gender:              strings.TrimSpace(row.Gender),
+				IDNumber:            strings.TrimSpace(row.IDNumber),
+				EnglishProficiency:  strings.TrimSpace(row.EnglishProficiency),
+				InterpreterRequired: row.InterpreterRequired,
 			}
 			if err := tx.Create(&subj).Error; err != nil {
 				return fmt.Errorf("row %d (%s %s): %w", i+1, first, last, err)
 			}
 			created = append(created, subj)
+			snapshot = append(snapshot, SubmittedExaminee{
+				SubjectID:           subj.ID,
+				FirstName:           first,
+				LastName:            last,
+				Email:               subj.Email,
+				Phone:               subj.Phone,
+				EmployeeRef:         subj.EmployeeRef,
+				Nationality:         subj.Nationality,
+				Gender:              subj.Gender,
+				EnglishProficiency:  subj.EnglishProficiency,
+				InterpreterRequired: subj.InterpreterRequired,
+				PreferredAt:         row.preferredAt(),
+			})
 		}
 
 		if len(created) == 0 {
 			return errors.New("no valid rows submitted")
 		}
 
-		// Serialise created subjects for audit trail.
-		b, _ := json.Marshal(created)
+		// Serialise the snapshot (no raw ID numbers) for the pending-appointments page.
+		b, _ := json.Marshal(snapshot)
 		now := time.Now().UTC()
 		return tx.Model(&req).Updates(map[string]interface{}{
 			"status":           "submitted",
@@ -242,16 +259,17 @@ func (s *Service) ResendIntakeRequest(id string) (*IntakeRequest, error) {
 
 // IntakeSubmission is the read-only view of what an organisation submitted.
 type IntakeSubmission struct {
-	ID          uint              `json:"id"`
-	ClientID    uint              `json:"client_id"`
-	ClientName  string            `json:"client_name"`
-	Status      string            `json:"status"`
-	SubmittedAt *time.Time        `json:"submitted_at,omitempty"`
-	AgreedAt    *time.Time        `json:"agreed_at,omitempty"`
-	Subjects    []subjects.Subject `json:"subjects"`
+	ID          uint                `json:"id"`
+	ClientID    uint                `json:"client_id"`
+	ClientName  string              `json:"client_name"`
+	Status      string              `json:"status"`
+	SubmittedAt *time.Time          `json:"submitted_at,omitempty"`
+	AgreedAt    *time.Time          `json:"agreed_at,omitempty"`
+	Subjects    []SubmittedExaminee `json:"subjects"`
 }
 
 // GetSubmission returns the examinees an organisation submitted plus consent metadata.
+// Each examinee carries a `booked` flag indicating whether an appointment already exists.
 func (s *Service) GetSubmission(id string) (*IntakeSubmission, error) {
 	var req IntakeRequest
 	if err := s.db.First(&req, id).Error; err != nil {
@@ -264,10 +282,20 @@ func (s *Service) GetSubmission(id string) (*IntakeSubmission, error) {
 		return nil, errors.New("this intake form has not been submitted yet")
 	}
 
-	var subs []subjects.Subject
+	var subs []SubmittedExaminee
 	if strings.TrimSpace(req.CreatedSubjects) != "" {
 		// Stored as a JSON snapshot at submission time.
 		_ = json.Unmarshal([]byte(req.CreatedSubjects), &subs)
+	}
+
+	// Mark anyone who already has an appointment so the page can hide the Book button.
+	for i := range subs {
+		if subs[i].SubjectID == 0 {
+			continue
+		}
+		var count int64
+		s.db.Table("appointments").Where("subject_id = ?", subs[i].SubjectID).Count(&count)
+		subs[i].Booked = count > 0
 	}
 
 	return &IntakeSubmission{
@@ -299,11 +327,55 @@ func sendSMTPMail(toEmail, subject, body string) error {
 
 // SubjectInput is one row submitted by the organisation.
 type SubjectInput struct {
-	FirstName   string `json:"first_name"`
-	LastName    string `json:"last_name"`
-	Email       string `json:"email"`
-	Phone       string `json:"phone"`
-	EmployeeRef string `json:"employee_ref"`
-	Nationality string `json:"nationality"`
-	Gender      string `json:"gender"`
+	FirstName           string `json:"first_name"`
+	LastName            string `json:"last_name"`
+	Email               string `json:"email"`
+	Phone               string `json:"phone"`
+	EmployeeRef         string `json:"employee_ref"`
+	Nationality         string `json:"nationality"`
+	Gender              string `json:"gender"`
+	IDNumber            string `json:"id_number"`
+	EnglishProficiency  string `json:"english_proficiency"`
+	InterpreterRequired bool   `json:"interpreter_required"`
+	// Preferred appointment timing chosen by the organisation (the corporate client
+	// knows their own scheduling). Sent as separate date (YYYY-MM-DD) + time (HH:MM).
+	PreferredDate string `json:"preferred_date"`
+	PreferredTime string `json:"preferred_time"`
+}
+
+// preferredAt combines the submitted date + time into a single timestamp.
+// Returns nil when no date was provided.
+func (in SubjectInput) preferredAt() *time.Time {
+	date := strings.TrimSpace(in.PreferredDate)
+	if date == "" {
+		return nil
+	}
+	clock := strings.TrimSpace(in.PreferredTime)
+	if clock == "" {
+		clock = "00:00"
+	}
+	t, err := time.Parse("2006-01-02 15:04", date+" "+clock)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+// SubmittedExaminee is the per-person snapshot captured at submission time. It carries
+// the created subject id plus the preferred timing so the pending-appointments page can
+// hand everything to the booking wizard. The raw ID number is intentionally omitted —
+// it is only persisted (encrypted) on the Subject record.
+type SubmittedExaminee struct {
+	SubjectID           uint       `json:"subject_id"`
+	FirstName           string     `json:"first_name"`
+	LastName            string     `json:"last_name"`
+	Email               string     `json:"email,omitempty"`
+	Phone               string     `json:"phone,omitempty"`
+	EmployeeRef         string     `json:"employee_ref,omitempty"`
+	Nationality         string     `json:"nationality,omitempty"`
+	Gender              string     `json:"gender,omitempty"`
+	EnglishProficiency  string     `json:"english_proficiency,omitempty"`
+	InterpreterRequired bool       `json:"interpreter_required"`
+	PreferredAt         *time.Time `json:"preferred_at,omitempty"`
+	Booked              bool       `json:"booked"`
 }

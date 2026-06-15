@@ -12,6 +12,7 @@ import (
 	"my-app/internal/modules/availability"
 	"my-app/internal/modules/exams"
 	"my-app/internal/modules/forms"
+	"my-app/internal/modules/intake"
 	"my-app/internal/modules/leads"
 	"my-app/internal/modules/subjects"
 )
@@ -77,6 +78,8 @@ func (s *Service) DeleteOrganizationData() error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		tables := []interface{}{
 			&forms.FormRequest{},
+			&intake.IntakeRequest{},
+			&appointments.DocumentShare{},
 			&appointments.SubjectDocument{},
 			&appointments.ClientDocument{},
 			&exams.Document{},
