@@ -5,11 +5,15 @@
 package email
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"net"
+	"net/http"
 	"net/smtp"
 	"os"
 	"regexp"
@@ -64,8 +68,62 @@ func htmlBody(textBody string) string {
 		`</div></body></html>`
 }
 
+// resendFrom resolves the sender for the Resend API, adding a display name if
+// the configured address doesn't already carry one.
+func resendFrom() string {
+	for _, k := range []string{"RESEND_FROM", "SMTP_FROM", "FROM_ADDRESS"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			if strings.Contains(v, "<") {
+				return v
+			}
+			return "Polygraph Forensic System <" + v + ">"
+		}
+	}
+	return "Polygraph Forensic System <onboarding@resend.dev>"
+}
+
+// sendViaResend delivers the email through Resend's HTTPS API. Used in
+// production (Railway/Vercel block outbound SMTP); selected when RESEND_API_KEY
+// is set.
+func sendViaResend(apiKey, from, to, subject, textBody, htmlContent string) error {
+	payload, err := json.Marshal(map[string]any{
+		"from":    from,
+		"to":      []string{to},
+		"subject": subject,
+		"html":    htmlContent,
+		"text":    textBody,
+	})
+	if err != nil {
+		return fmt.Errorf("resend marshal: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://api.resend.com/emails", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("resend request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("resend send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("resend send failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
 // Send delivers a branded email (plain-text + HTML alternative) to one recipient.
+// Prefers the Resend HTTPS API when RESEND_API_KEY is set (works on hosts that
+// block outbound SMTP), otherwise falls back to direct SMTP for local dev.
 func Send(toEmail, subject, textBody string) error {
+	if apiKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY")); apiKey != "" {
+		return sendViaResend(apiKey, resendFrom(),
+			sanitizeHeader(toEmail), sanitizeHeader(subject), textBody, htmlBody(textBody))
+	}
+
 	host := strings.TrimSpace(os.Getenv("SMTP_HOST"))
 	port := strings.TrimSpace(os.Getenv("SMTP_PORT"))
 	if host == "" || port == "" {
