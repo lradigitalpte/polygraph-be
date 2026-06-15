@@ -234,6 +234,18 @@ type appointmentLink struct {
 
 func (appointmentLink) TableName() string { return "appointments" }
 
+// signExamDocuments swaps the stored (private) document URLs for short-lived
+// presigned URLs so the browser can actually open them from a private bucket.
+func (s *Service) signExamDocuments(exam *Exam) {
+	if exam == nil {
+		return
+	}
+	ctx := context.Background()
+	for i := range exam.Documents {
+		exam.Documents[i].URL = storage.SignedURLForStored(ctx, s.storage, exam.Documents[i].URL)
+	}
+}
+
 func (s *Service) GetExamByID(id string) (*Exam, error) {
 	var exam Exam
 	err := s.db.
@@ -248,6 +260,7 @@ func (s *Service) GetExamByID(id string) (*Exam, error) {
 		}
 		return nil, err
 	}
+	s.signExamDocuments(&exam)
 	return &exam, nil
 }
 
@@ -266,6 +279,7 @@ func (s *Service) GetExamByAppointmentID(appointmentID string) (*Exam, error) {
 		}
 		return nil, err
 	}
+	s.signExamDocuments(&exam)
 	return &exam, nil
 }
 
