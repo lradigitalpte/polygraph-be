@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"my-app/internal/database"
+	"my-app/internal/dbseed"
 	"my-app/internal/models"
 	"my-app/internal/modules/appointments"
 	"my-app/internal/modules/availability"
@@ -76,6 +77,26 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 
 func (s *Service) DeleteOrganizationData() error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Break optional FK links that block hard deletes (exam <-> appointment cycle, etc.).
+		nullableFKs := []struct {
+			model  interface{}
+			column string
+		}{
+			{&appointments.Appointment{}, "exam_id"},
+			{&exams.Exam{}, "appointment_id"},
+			{&appointments.Quotation{}, "appointment_id"},
+			{&forms.FormRequest{}, "client_document_id"},
+			{&forms.FormRequest{}, "subject_document_id"},
+		}
+		for _, fk := range nullableFKs {
+			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).
+				Model(fk.model).
+				Where(fk.column + " IS NOT NULL").
+				Update(fk.column, nil).Error; err != nil {
+				return err
+			}
+		}
+
 		tables := []interface{}{
 			&forms.FormRequest{},
 			&intake.IntakeRequest{},
@@ -96,18 +117,18 @@ func (s *Service) DeleteOrganizationData() error {
 			&leads.Lead{},
 			&availability.Block{},
 			&models.AuditLog{},
+			&exams.ExamType{},
+			&forms.FormTemplate{},
 		}
 		for _, table := range tables {
-			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(table).Error; err != nil {
+			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(table).Error; err != nil {
 				return err
 			}
 		}
 
-		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&forms.FormTemplate{}).Error; err != nil {
-			return err
-		}
 		forms.SeedTemplates(tx)
+		dbseed.SeedExamTypes(tx)
 
-		return tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&OrganizationSettings{}).Error
+		return tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&OrganizationSettings{}).Error
 	})
 }

@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -59,6 +60,7 @@ func (ctrl *Controller) DeleteOrganization(c *gin.Context) {
 	}
 
 	if err := ctrl.service.DeleteOrganizationData(); err != nil {
+		log.Printf("delete organization data failed: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete organization data"})
 		return
 	}

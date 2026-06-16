@@ -74,17 +74,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 		db.FirstOrCreate(&p, rbac.Permission{Name: p.Name})
 	}
 
-	defaultExamTypes := []exams.ExamType{
-		{Name: "Pre-employment Screening", Description: "Baseline screening for employment or onboarding.", Category: "Screening", Duration: 150, Price: 450, Active: true},
-		{Name: "Specific Issue Investigation", Description: "Focused investigation into a reported incident or allegation.", Category: "Investigation", Duration: 150, Price: 600, Active: true},
-		{Name: "Periodic Maintenance", Description: "Recurring trust and compliance maintenance exam.", Category: "Maintenance", Duration: 120, Price: 350, Active: true},
-		{Name: "Criminal Defense Exam", Description: "Defense-oriented forensic examination for criminal matters.", Category: "Legal", Duration: 150, Price: 700, Active: true},
-		{Name: "Civil Litigation Support", Description: "Support examination for civil disputes and case preparation.", Category: "Legal", Duration: 150, Price: 550, Active: true},
-		{Name: "Government/Security Clearance", Description: "Security and clearance review examination.", Category: "Security", Duration: 180, Price: 800, Active: true},
-	}
-	for _, examType := range defaultExamTypes {
-		db.FirstOrCreate(&examType, exams.ExamType{Name: examType.Name})
-	}
+	SeedExamTypes(db)
 
 	// 2. Define Roles
 	//
@@ -119,4 +109,19 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 	}
 
 	logger.Info("Database seeding completed")
+}
+
+// SeedExamTypes restores the default exam type catalog.
+func SeedExamTypes(db *gorm.DB) {
+	defaultExamTypes := []exams.ExamType{
+		{Name: "Pre-employment Screening", Description: "Baseline screening for employment or onboarding.", Category: "Screening", Duration: 150, Price: 450, Active: true},
+		{Name: "Specific Issue Investigation", Description: "Focused investigation into a reported incident or allegation.", Category: "Investigation", Duration: 150, Price: 600, Active: true},
+		{Name: "Periodic Maintenance", Description: "Recurring trust and compliance maintenance exam.", Category: "Maintenance", Duration: 120, Price: 350, Active: true},
+		{Name: "Criminal Defense Exam", Description: "Defense-oriented forensic examination for criminal matters.", Category: "Legal", Duration: 150, Price: 700, Active: true},
+		{Name: "Civil Litigation Support", Description: "Support examination for civil disputes and case preparation.", Category: "Legal", Duration: 150, Price: 550, Active: true},
+		{Name: "Government/Security Clearance", Description: "Security and clearance review examination.", Category: "Security", Duration: 180, Price: 800, Active: true},
+	}
+	for _, examType := range defaultExamTypes {
+		db.FirstOrCreate(&examType, exams.ExamType{Name: examType.Name})
+	}
 }

@@ -3,6 +3,8 @@ package appointments
 import (
 	"time"
 
+	"my-app/internal/modules/subjects"
+
 	"gorm.io/gorm"
 )
 
@@ -33,6 +35,7 @@ type Appointment struct {
 	ClientID          uint           `json:"client_id"`
 	Client            Client         `gorm:"foreignKey:ClientID" json:"client,omitempty"`
 	SubjectID         uint           `json:"subject_id"`
+	Subject           subjects.Subject `gorm:"foreignKey:SubjectID" json:"subject,omitempty"`
 	ExaminerID        uint           `json:"examiner_id"`
 	ScheduledAt       time.Time      `json:"scheduled_at"`
 	Duration          int            `json:"duration"` // In minutes

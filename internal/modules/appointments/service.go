@@ -149,7 +149,7 @@ func (s *Service) CreateAppointment(app *Appointment) error {
 
 func (s *Service) GetAllAppointments(clientID ...string) ([]Appointment, error) {
 	var appointments []Appointment
-	query := s.db.Preload("Client").Order("scheduled_at DESC")
+	query := s.db.Preload("Client").Preload("Subject").Order("scheduled_at DESC")
 	if len(clientID) > 0 && strings.TrimSpace(clientID[0]) != "" {
 		query = query.Where("client_id = ?", strings.TrimSpace(clientID[0]))
 	}

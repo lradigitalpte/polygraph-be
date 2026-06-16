@@ -183,7 +183,7 @@ func (s *Service) GetSubjectAppointments(subjectID, clientID string) ([]Appointm
 		return nil, err
 	}
 
-	query := s.db.Preload("Client").Where("subject_id = ?", sid).Order("scheduled_at DESC")
+	query := s.db.Preload("Client").Preload("Subject").Where("subject_id = ?", sid).Order("scheduled_at DESC")
 	if trimmed := clientID; trimmed != "" {
 		query = query.Where("client_id = ?", trimmed)
 	}
