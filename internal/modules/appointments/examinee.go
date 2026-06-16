@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"my-app/internal/modules/auth"
 	"my-app/internal/modules/subjects"
 
 	"gorm.io/gorm"
@@ -17,7 +18,13 @@ type ExamineeRosterEntry struct {
 	Subject         subjects.Subject `json:"subject"`
 	SessionCount    int              `json:"session_count"`
 	CompletedCount  int              `json:"completed_count"`
+	UpcomingCount   int              `json:"upcoming_count"`
 	LastScheduledAt *time.Time       `json:"last_scheduled_at,omitempty"`
+	// NextScheduledAt is the soonest future, non-cancelled appointment — used to show
+	// at a glance whether this examinee has an exam booked.
+	NextScheduledAt       *time.Time `json:"next_scheduled_at,omitempty"`
+	NextAppointmentStatus string     `json:"next_appointment_status,omitempty"`
+	NextExaminerName      string     `json:"next_examiner_name,omitempty"`
 }
 
 func (s *Service) GetClientExaminees(clientID string) ([]ExamineeRosterEntry, error) {
@@ -35,11 +42,17 @@ func (s *Service) GetClientExaminees(clientID string) ([]ExamineeRosterEntry, er
 		return nil, err
 	}
 
+	now := time.Now()
 	stats := make(map[uint]struct {
-		count     int
-		completed int
-		last      time.Time
-		hasLast   bool
+		count          int
+		completed      int
+		upcoming       int
+		last           time.Time
+		hasLast        bool
+		next           time.Time
+		hasNext        bool
+		nextStatus     string
+		nextExaminerID uint
 	})
 	for _, appt := range appointments {
 		st := stats[appt.SubjectID]
@@ -50,6 +63,16 @@ func (s *Service) GetClientExaminees(clientID string) ([]ExamineeRosterEntry, er
 		if !st.hasLast || appt.ScheduledAt.After(st.last) {
 			st.last = appt.ScheduledAt
 			st.hasLast = true
+		}
+		// Future, non-cancelled appointment = an exam currently booked.
+		if appt.ScheduledAt.After(now) && appt.Status != "cancelled" {
+			st.upcoming++
+			if !st.hasNext || appt.ScheduledAt.Before(st.next) {
+				st.next = appt.ScheduledAt
+				st.hasNext = true
+				st.nextStatus = appt.Status
+				st.nextExaminerID = appt.ExaminerID
+			}
 		}
 		stats[appt.SubjectID] = st
 	}
@@ -89,6 +112,7 @@ func (s *Service) GetClientExaminees(clientID string) ([]ExamineeRosterEntry, er
 		byID[subj.ID] = subj
 	}
 
+	examinerIDs := make(map[uint]struct{})
 	entries := make([]ExamineeRosterEntry, 0, len(orderedIDs))
 	for _, sid := range orderedIDs {
 		subj, ok := byID[sid]
@@ -101,12 +125,45 @@ func (s *Service) GetClientExaminees(clientID string) ([]ExamineeRosterEntry, er
 			t := st.last
 			last = &t
 		}
+		var next *time.Time
+		if st.hasNext {
+			t := st.next
+			next = &t
+			if st.nextExaminerID > 0 {
+				examinerIDs[st.nextExaminerID] = struct{}{}
+			}
+		}
 		entries = append(entries, ExamineeRosterEntry{
-			Subject:         subj,
-			SessionCount:    st.count,
-			CompletedCount:  st.completed,
-			LastScheduledAt: last,
+			Subject:               subj,
+			SessionCount:          st.count,
+			CompletedCount:        st.completed,
+			UpcomingCount:         st.upcoming,
+			LastScheduledAt:       last,
+			NextScheduledAt:       next,
+			NextAppointmentStatus: st.nextStatus,
 		})
+	}
+
+	examinerNames := make(map[uint]string, len(examinerIDs))
+	if len(examinerIDs) > 0 {
+		ids := make([]uint, 0, len(examinerIDs))
+		for id := range examinerIDs {
+			ids = append(ids, id)
+		}
+		var examiners []auth.User
+		if err := s.db.Where("id IN ?", ids).Find(&examiners).Error; err != nil {
+			return nil, err
+		}
+		for _, ex := range examiners {
+			examinerNames[ex.ID] = strings.TrimSpace(ex.Name)
+		}
+	}
+
+	for i := range entries {
+		st := stats[entries[i].Subject.ID]
+		if st.hasNext && st.nextExaminerID > 0 {
+			entries[i].NextExaminerName = examinerNames[st.nextExaminerID]
+		}
 	}
 
 	return entries, nil
