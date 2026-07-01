@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,14 +105,29 @@ func (s *Service) CreateReport(examID uint, verdict, content string) (*ExamRepor
 	hashSum := sha256.Sum256([]byte(encrypted))
 	hashStr := hex.EncodeToString(hashSum[:])
 
-	report := ExamReport{
-		ExamID:          examID,
-		Verdict:         verdict,
-		EncryptedReport: encrypted,
-		Hash:            hashStr,
-	}
-
-	if err := s.db.Create(&report).Error; err != nil {
+	var report ExamReport
+	err = s.db.Where("exam_id = ?", examID).First(&report).Error
+	if err == nil {
+		if report.IsLocked {
+			return nil, fmt.Errorf("cannot modify a locked forensic report")
+		}
+		report.Verdict = verdict
+		report.EncryptedReport = encrypted
+		report.Hash = hashStr
+		if err := s.db.Save(&report).Error; err != nil {
+			return nil, err
+		}
+	} else if errors.Is(err, gorm.ErrRecordNotFound) {
+		report = ExamReport{
+			ExamID:          examID,
+			Verdict:         verdict,
+			EncryptedReport: encrypted,
+			Hash:            hashStr,
+		}
+		if err := s.db.Create(&report).Error; err != nil {
+			return nil, err
+		}
+	} else {
 		return nil, err
 	}
 
@@ -373,79 +389,255 @@ func (s *Service) StartDocumentationForAppointment(appointmentID string) (*Exam,
 	return s.GetExamByID(strconv.FormatUint(uint64(exam.ID), 10))
 }
 
+type StructuredReport struct {
+	Purpose           string `json:"purpose"`
+	Instrument        string `json:"instrument"`
+	PreTestNotes      string `json:"pre_test_notes"`
+	Questions         []struct {
+		Text       string `json:"text"`
+		Answer     string `json:"answer"`
+		Evaluation string `json:"evaluation"`
+	} `json:"questions"`
+	PostTestNotes     string `json:"post_test_notes"`
+	Conclusion        string `json:"conclusion"`
+	ReferenceNo       string `json:"reference_no"`
+	ExamDate          string `json:"exam_date"`
+	Section4FollowUp  string `json:"section_4_follow_up"`
+	LimeToneNotes     string `json:"limestone_notes"`
+	PreTestPhaseText  string `json:"pre_test_phase_text"`
+	ExamPhaseText     string `json:"exam_phase_text"`
+	OpinionPhaseText  string `json:"opinion_phase_text"`
+}
+
 func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string) ([]byte, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetProtection(gofpdf.CnProtectPrint, password, password)
+	
+	// Parse report content
+	var reportData StructuredReport
+	isStructured := json.Unmarshal([]byte(content), &reportData) == nil
+
+	// Set header func
+	pdf.SetHeaderFunc(func() {
+		// Draw logo
+		if _, err := os.Stat("assets/logo.png"); err == nil {
+			pdf.Image("assets/logo.png", 15, 12, 45, 0, false, "PNG", 0, "")
+		} else {
+			// Fallback text if image not found
+			pdf.SetFont("Helvetica", "B", 12)
+			pdf.SetTextColor(220, 38, 38)
+			pdf.Text(15, 18, "POLYGRAPH UAE")
+		}
+		
+		pdf.SetTextColor(120, 120, 120)
+		pdf.SetFont("Helvetica", "B", 8)
+		pdf.Text(155, 18, "STAFF IN CONFIDENCE")
+		
+		pdf.SetDrawColor(200, 200, 200)
+		pdf.SetLineWidth(0.3)
+		pdf.Line(15, 23, 195, 23)
+	})
+
+	// Set footer func
+	pdf.SetFooterFunc(func() {
+		// Draw logos
+		yPos := float64(262)
+		if _, err := os.Stat("assets/americanpolygraphassociation.png"); err == nil {
+			pdf.Image("assets/americanpolygraphassociation.png", 82, yPos, 14, 14, false, "PNG", 0, "")
+		}
+		if _, err := os.Stat("assets/singaporeassociationofpolygraph.jpg"); err == nil {
+			pdf.Image("assets/singaporeassociationofpolygraph.jpg", 102, yPos + 1.5, 23, 11, false, "JPEG", 0, "")
+		}
+		
+		pdf.SetTextColor(100, 100, 100)
+		pdf.SetFont("Helvetica", "", 7.5)
+		pdf.SetXY(15, yPos + 17)
+		pdf.CellFormat(180, 4, "Polygraph International HR Consultancy LLC | Office 401-41, Deyaar building, Al Barsha 1, Dubai, United Arab Emirates", "", 0, "C", false, 0, "")
+		pdf.Ln(4)
+		pdf.CellFormat(180, 4, "Website: www.polygraph.ae | Email: info@polygraph.ae", "", 0, "C", false, 0, "")
+		
+		pdf.SetTextColor(120, 120, 120)
+		pdf.SetFont("Helvetica", "B", 8)
+		pdf.SetXY(15, yPos + 26)
+		pdf.CellFormat(180, 4, "STAFF IN CONFIDENCE", "", 0, "C", false, 0, "")
+	})
+
+	pdf.SetMargins(15, 32, 15)
+	pdf.SetAutoPageBreak(true, 42) // leaves space for footer
 	pdf.AddPage()
 	
-	// Branded dark top bar simulation
-	pdf.SetFillColor(0, 0, 0)
-	pdf.Rect(0, 0, 210, 30, "F")
-	
-	pdf.SetTextColor(255, 255, 255)
-	pdf.SetFont("Helvetica", "B", 16)
-	pdf.Text(15, 20, "POLYGRAPH FORENSIC SYSTEM")
-	
-	// Report Details Section
 	pdf.SetTextColor(0, 0, 0)
-	pdf.Ln(25) // move below header
 	
-	pdf.SetFont("Helvetica", "B", 14)
-	pdf.Cell(0, 10, "Confidential Forensic Examination Report")
-	pdf.Ln(12)
-	
+	// Page 1 Content
+	// EXAMINEE INFORMATION
 	pdf.SetFont("Helvetica", "B", 10)
-	pdf.Cell(40, 7, "Examinee Name:")
-	pdf.SetFont("Helvetica", "", 10)
-	pdf.Cell(0, 7, subjectName)
+	pdf.Cell(0, 6, "EXAMINEE INFORMATION")
 	pdf.Ln(7)
 	
-	pdf.SetFont("Helvetica", "B", 10)
-	pdf.Cell(40, 7, "Exam Type:")
-	pdf.SetFont("Helvetica", "", 10)
-	pdf.Cell(0, 7, examType)
-	pdf.Ln(7)
-	
-	pdf.SetFont("Helvetica", "B", 10)
-	pdf.Cell(40, 7, "Requesting Client:")
-	pdf.SetFont("Helvetica", "", 10)
-	pdf.Cell(0, 7, clientName)
-	pdf.Ln(7)
-	
-	pdf.SetFont("Helvetica", "B", 10)
-	pdf.Cell(40, 7, "Verdict:")
-	pdf.SetFont("Helvetica", "B", 10)
-	if verdict == "DI" {
-		pdf.SetTextColor(200, 0, 0) // red
-		pdf.Cell(0, 7, "Deception Indicated (DI)")
-	} else if verdict == "NDI" {
-		pdf.SetTextColor(0, 150, 0) // green
-		pdf.Cell(0, 7, "No Deception Indicated (NDI)")
-	} else {
-		pdf.SetTextColor(100, 100, 100) // gray
-		pdf.Cell(0, 7, "Inconclusive")
+	// Detail fields table/list
+	pdf.SetFont("Helvetica", "B", 9)
+	pdf.Cell(30, 6, "OUR REF")
+	pdf.SetFont("Helvetica", "", 9)
+	refNo := "PIN/CONF/2026/001"
+	if isStructured && reportData.ReferenceNo != "" {
+		refNo = reportData.ReferenceNo
 	}
-	pdf.SetTextColor(0, 0, 0)
-	pdf.Ln(12)
+	pdf.Cell(0, 6, ": "+refNo)
+	pdf.Ln(6)
 	
-	// Divider
-	pdf.Line(10, pdf.GetY(), 200, pdf.GetY())
-	pdf.Ln(8)
+	pdf.SetFont("Helvetica", "B", 9)
+	pdf.Cell(30, 6, "DATE")
+	pdf.SetFont("Helvetica", "", 9)
+	examDate := time.Now().Format("02nd May 2006")
+	if isStructured && reportData.ExamDate != "" {
+		examDate = reportData.ExamDate
+	}
+	pdf.Cell(0, 6, ": "+examDate)
+	pdf.Ln(6)
 	
-	// Report Content
-	pdf.SetFont("Helvetica", "B", 11)
-	pdf.Cell(0, 7, "Professional Findings & Conclusion:")
-	pdf.Ln(8)
+	pdf.SetFont("Helvetica", "B", 9)
+	pdf.Cell(30, 6, "EXAMINEE")
+	pdf.SetFont("Helvetica", "", 9)
+	pdf.Cell(0, 6, ": "+subjectName)
+	pdf.Ln(10)
 	
-	pdf.SetFont("Helvetica", "", 10)
-	pdf.MultiCell(0, 6, content, "", "L", false)
-	
-	pdf.Ln(15)
-	pdf.SetFont("Helvetica", "I", 9)
-	pdf.Cell(0, 5, "This document is encrypted for strict confidentiality and data protection.")
-	pdf.Ln(5)
-	pdf.Cell(0, 5, fmt.Sprintf("Report Generated on %s", time.Now().Format("Jan 02, 2006")))
-	
+	if isStructured {
+		// SECTION 1: PRE-EXAMINATION PHASE
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.Cell(0, 6, "SECTION 1: PRE-EXAMINATION PHASE")
+		pdf.Ln(7)
+		
+		pdf.SetFont("Helvetica", "", 9.5)
+		preTestText := fmt.Sprintf("On %s at about 14:00 hrs (Dubai Time), I commenced to administer a polygraph examination to the above subject.\n\nA screening polygraph test was administered as part of a pre-employment test for %s.", examDate, clientName)
+		if reportData.PreTestPhaseText != "" {
+			preTestText = reportData.PreTestPhaseText
+		}
+		pdf.MultiCell(0, 5, preTestText, "", "L", false)
+		pdf.Ln(5)
+		
+		preNotes := "Examinee physical and mental health assessed as fit for testing. Legal rights and examination consent form explained and signed."
+		if reportData.PreTestNotes != "" {
+			preNotes = reportData.PreTestNotes
+		}
+		pdf.MultiCell(0, 5, preNotes, "", "L", false)
+		pdf.Ln(10)
+		
+		// SECTION 2: EXAMINATION PHASE
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.Cell(0, 6, "SECTION 2: EXAMINATION PHASE")
+		pdf.Ln(7)
+		
+		pdf.SetFont("Helvetica", "", 9.5)
+		examPhaseText := "During the examination phase, the relevant and comparison questions were administered to subject with a set of relevant questions. His verbal responses to the relevant questions were as indicated:"
+		if reportData.ExamPhaseText != "" {
+			examPhaseText = reportData.ExamPhaseText
+		}
+		pdf.MultiCell(0, 5, examPhaseText, "", "L", false)
+		pdf.Ln(6)
+		
+		// Q&A Table
+		if len(reportData.Questions) > 0 {
+			pdf.SetFont("Helvetica", "B", 8)
+			pdf.SetFillColor(250, 250, 250)
+			pdf.CellFormat(15, 7, "S/N", "1", 0, "C", true, 0, "")
+			pdf.CellFormat(125, 7, "Questions", "1", 0, "L", true, 0, "")
+			pdf.CellFormat(40, 7, "Examinee Response", "1", 1, "C", true, 0, "")
+			
+			pdf.SetFont("Helvetica", "", 9)
+			for idx, q := range reportData.Questions {
+				x, y := pdf.GetX(), pdf.GetY()
+				
+				// Calculate dynamic heights
+				pdf.SetFont("Helvetica", "I", 9)
+				pdf.MultiCell(125, 6, q.Text, "1", "L", false)
+				y2 := pdf.GetY()
+				h := y2 - y
+				
+				// Draw index cell
+				pdf.SetXY(x, y)
+				pdf.SetFont("Helvetica", "", 9)
+				pdf.CellFormat(15, h, strconv.Itoa(idx+1), "1", 0, "C", false, 0, "")
+				
+				// Draw text cell background or redraw border
+				pdf.SetXY(x+15, y)
+				pdf.CellFormat(125, h, "", "1", 0, "L", false, 0, "")
+				
+				// Draw answer
+				pdf.SetXY(x+140, y)
+				pdf.SetFont("Helvetica", "B", 9)
+				pdf.CellFormat(40, h, q.Answer, "1", 1, "C", false, 0, "")
+			}
+			pdf.Ln(8)
+		}
+		
+		// Limestone / test process text
+		limestoneNotes := "The examination was conducted with a Limestone Technologies Computerised Polygraph, recording the blood pressure, pulse rate, galvanic skin response and breathing pattern of the subject.\n\nFour polygrams, including 1 acquaintance and 3 official tests were recorded, and the process ended at about 15:35 hrs (Dubai Time)."
+		if reportData.LimeToneNotes != "" {
+			limestoneNotes = reportData.LimeToneNotes
+		}
+		pdf.SetFont("Helvetica", "", 9.5)
+		pdf.MultiCell(0, 5, limestoneNotes, "", "L", false)
+		pdf.Ln(10)
+		
+		// SECTION 3: OPINION OF EXAMINER
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.Cell(0, 6, "SECTION 3: OPINION OF EXAMINER")
+		pdf.Ln(7)
+		
+		opinionText := fmt.Sprintf("Based on the diagnostic evaluations and analysis of the polygrams, I am in the opinion that the examination on %s as %s.", subjectName, verdict)
+		if reportData.OpinionPhaseText != "" {
+			opinionText = reportData.OpinionPhaseText
+		}
+		pdf.SetFont("Helvetica", "", 9.5)
+		pdf.MultiCell(0, 5, opinionText, "", "L", false)
+		pdf.Ln(5)
+		
+		postNotes := "Examinee cooperated and the test administration was as per procedure."
+		if reportData.PostTestNotes != "" {
+			postNotes = reportData.PostTestNotes
+		}
+		pdf.MultiCell(0, 5, postNotes, "", "L", false)
+		pdf.Ln(6)
+		
+		// Result badge
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.Cell(25, 6, "Result: ")
+		
+		pdf.SetFont("Helvetica", "B", 11)
+		if verdict == "DI" {
+			pdf.SetTextColor(200, 0, 0)
+			pdf.Cell(0, 6, "NOT TRUTHFUL")
+		} else if verdict == "NDI" {
+			pdf.SetTextColor(0, 150, 0)
+			pdf.Cell(0, 6, "TRUTHFUL / NO DECEPTION INDICATED")
+		} else {
+			pdf.SetTextColor(100, 100, 100)
+			pdf.Cell(0, 6, "INCONCLUSIVE")
+		}
+		pdf.SetTextColor(0, 0, 0)
+		pdf.Ln(12)
+		
+		// SECTION 4: FOLLOW-UP BY REQUESTING AGENCY
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.Cell(0, 6, "SECTION 4: FOLLOW-UP BY REQUESTING AGENCY")
+		pdf.Ln(7)
+		
+		followUp := "Nil"
+		if reportData.Section4FollowUp != "" {
+			followUp = reportData.Section4FollowUp
+		}
+		pdf.SetFont("Helvetica", "", 9.5)
+		pdf.MultiCell(0, 5, followUp, "", "L", false)
+		
+	} else {
+		// Fallback for unstructured text
+		pdf.SetFont("Helvetica", "B", 10)
+		pdf.Cell(0, 6, "REPORT FINDINGS & CONCLUSION")
+		pdf.Ln(7)
+		pdf.SetFont("Helvetica", "", 9.5)
+		pdf.MultiCell(0, 5.5, content, "", "L", false)
+	}
+
 	var buf bytes.Buffer
 	err := pdf.Output(&buf)
 	if err != nil {
@@ -500,12 +692,16 @@ func (s *Service) GetConsolidatedReportStats() (map[string]any, error) {
 	}, nil
 }
 
-func (s *Service) ListSecureShares(search string, clientID uint) ([]SecureReportShare, error) {
+func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint) ([]SecureReportShare, error) {
 	var shares []SecureReportShare
 	query := s.db.Preload("Subject").Preload("ExamReport")
 
 	if clientID > 0 {
 		query = query.Where("client_id = ?", clientID)
+	}
+
+	if subjectID > 0 {
+		query = query.Where("subject_id = ?", subjectID)
 	}
 
 	if search != "" {

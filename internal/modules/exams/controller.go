@@ -301,6 +301,7 @@ func (ctrl *Controller) StartDocumentation(c *gin.Context) {
 func (ctrl *Controller) ListSecureShares(c *gin.Context) {
 	search := c.Query("search")
 	clientIDStr := c.Query("client_id")
+	subjectIDStr := c.Query("subject_id")
 
 	var clientID uint
 	if clientIDStr != "" {
@@ -310,7 +311,15 @@ func (ctrl *Controller) ListSecureShares(c *gin.Context) {
 		}
 	}
 
-	shares, err := ctrl.service.ListSecureShares(search, clientID)
+	var subjectID uint
+	if subjectIDStr != "" {
+		id, err := strconv.ParseUint(subjectIDStr, 10, 32)
+		if err == nil {
+			subjectID = uint(id)
+		}
+	}
+
+	shares, err := ctrl.service.ListSecureShares(search, clientID, subjectID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch secure shares"})
 		return
