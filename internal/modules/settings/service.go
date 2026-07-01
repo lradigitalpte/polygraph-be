@@ -25,9 +25,13 @@ type Service struct {
 }
 
 type UpdateOrganizationInput struct {
-	Name         string `json:"name"`
-	SupportEmail string `json:"support_email"`
-	Address      string `json:"address"`
+	Name         string   `json:"name"`
+	SupportEmail string   `json:"support_email"`
+	Address      string   `json:"address"`
+	Currency     string   `json:"currency"`
+	UsdAedRate   *float64 `json:"usd_aed_rate"`
+	UsdGbpRate   *float64 `json:"usd_gbp_rate"`
+	UsdEurRate   *float64 `json:"usd_eur_rate"`
 }
 
 func NewService() *Service {
@@ -39,8 +43,12 @@ func (s *Service) GetOrganization() (*OrganizationSettings, error) {
 	err := s.db.First(&row, singletonID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		row = OrganizationSettings{
-			ID:   singletonID,
-			Name: "Polygraph Forensic Labs",
+			ID:         singletonID,
+			Name:       "Polygraph Forensic Labs",
+			Currency:   "USD",
+			UsdAedRate: 3.6725,
+			UsdGbpRate: 0.7850,
+			UsdEurRate: 0.9250,
 		}
 		if createErr := s.db.Create(&row).Error; createErr != nil {
 			return nil, createErr
@@ -64,10 +72,25 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 		return nil, err
 	}
 
+	currency := strings.TrimSpace(input.Currency)
+	if currency == "" {
+		currency = "USD"
+	}
+
 	updates := map[string]interface{}{
 		"name":          name,
 		"support_email": strings.TrimSpace(input.SupportEmail),
 		"address":       strings.TrimSpace(input.Address),
+		"currency":      currency,
+	}
+	if input.UsdAedRate != nil {
+		updates["usd_aed_rate"] = *input.UsdAedRate
+	}
+	if input.UsdGbpRate != nil {
+		updates["usd_gbp_rate"] = *input.UsdGbpRate
+	}
+	if input.UsdEurRate != nil {
+		updates["usd_eur_rate"] = *input.UsdEurRate
 	}
 	if err := s.db.Model(row).Updates(updates).Error; err != nil {
 		return nil, err

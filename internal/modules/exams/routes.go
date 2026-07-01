@@ -29,5 +29,17 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		r.GET("/:id", permissionMiddleware("exam:view"), ctrl.GetReport)
 		r.POST("/documents", permissionMiddleware("document:manage"), ctrl.UploadDocument)
 		r.GET("/:id/documents", permissionMiddleware("exam:view"), ctrl.GetDocuments)
+		r.POST("/shares", permissionMiddleware("exam:view"), ctrl.CreateSecureShare)
+		r.GET("/shares", permissionMiddleware("exam:view"), ctrl.ListSecureShares)
+		r.POST("/shares/:id/regenerate", permissionMiddleware("exam:view"), ctrl.RegenerateSecureShare)
+		r.GET("/stats", permissionMiddleware("exam:view"), ctrl.GetConsolidatedStats)
+	}
+}
+
+// RegisterPublicRoutes mounts public secure share unlocking endpoint.
+func RegisterPublicRoutes(router *gin.RouterGroup, ctrl *Controller) {
+	p := router.Group("/shared-reports")
+	{
+		p.GET("/:token", ctrl.GetSecureShare)
 	}
 }

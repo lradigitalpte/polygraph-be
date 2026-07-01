@@ -1063,6 +1063,17 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 		input.Status = "Pending"
 	}
 
+	if input.Currency == "" {
+		defaultCurrency := "USD"
+		var org struct {
+			Currency string `gorm:"column:currency"`
+		}
+		if err := s.db.Table("organization_settings").Select("currency").Where("id = ?", 1).First(&org).Error; err == nil && org.Currency != "" {
+			defaultCurrency = org.Currency
+		}
+		input.Currency = defaultCurrency
+	}
+
 	if err := s.db.Create(input).Error; err != nil {
 		return err
 	}

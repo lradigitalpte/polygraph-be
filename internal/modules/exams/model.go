@@ -141,3 +141,22 @@ type ExamPhase struct {
 	EndTime   time.Time `json:"end_time"`
 	Notes     string    `gorm:"type:text" json:"notes"`
 }
+
+// SecureReportShare tracks secure external distribution links for final reports
+type SecureReportShare struct {
+	ID             uint             `gorm:"primarykey" json:"id"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt   `gorm:"index" json:"-"`
+	ExamReportID   uint             `json:"exam_report_id"`
+	ExamReport     *ExamReport      `gorm:"foreignKey:ExamReportID" json:"exam_report,omitempty"`
+	ClientID       uint             `json:"client_id"`
+	SubjectID      uint             `json:"subject_id"`
+	Subject        subjects.Subject `gorm:"foreignKey:SubjectID" json:"subject,omitempty"`
+	RecipientEmail string           `gorm:"size:255;not null" json:"recipient_email"`
+	Token          string           `gorm:"size:255;uniqueIndex;not null" json:"token"`
+	Password       string           `gorm:"size:100;not null" json:"password"`
+	PdfURL         string           `gorm:"size:500" json:"pdf_url"`
+	Status         string           `gorm:"size:50;default:'sent'" json:"status"` // sent, viewed
+	ExpiresAt      time.Time        `json:"expires_at"`
+}

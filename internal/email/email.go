@@ -7,6 +7,7 @@ package email
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,6 +189,156 @@ func Send(toEmail, subject, textBody string) error {
 	}
 	// #nosec G707 -- from and toEmail are CRLF-stripped via sanitizeHeader above,
 	// so they cannot inject additional SMTP headers or commands.
+	if err := c.Mail(from); err != nil {
+		return fmt.Errorf("smtp mail from: %w", err)
+	}
+	if err := c.Rcpt(toEmail); err != nil {
+		return fmt.Errorf("smtp rcpt to: %w", err)
+	}
+	w, err := c.Data()
+	if err != nil {
+		return fmt.Errorf("smtp data: %w", err)
+	}
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("smtp write: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("smtp close: %w", err)
+	}
+	return c.Quit()
+}
+
+func sendViaResendWithAttachment(apiKey, from, to, subject, textBody, htmlContent, attachmentName string, attachmentBytes []byte) error {
+	payload, err := json.Marshal(map[string]any{
+		"from":    from,
+		"to":      []string{to},
+		"subject": subject,
+		"html":    htmlContent,
+		"text":    textBody,
+		"attachments": []map[string]any{
+			{
+				"content":  base64.StdEncoding.EncodeToString(attachmentBytes),
+				"filename": attachmentName,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("resend marshal: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://api.resend.com/emails", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("resend request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("resend send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("resend send failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+func SendWithAttachment(toEmail, subject, textBody, attachmentName string, attachmentBytes []byte) error {
+	if apiKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY")); apiKey != "" {
+		return sendViaResendWithAttachment(apiKey, resendFrom(),
+			sanitizeHeader(toEmail), sanitizeHeader(subject), textBody, htmlBody(textBody), attachmentName, attachmentBytes)
+	}
+
+	host := strings.TrimSpace(os.Getenv("SMTP_HOST"))
+	port := strings.TrimSpace(os.Getenv("SMTP_PORT"))
+	if host == "" || port == "" {
+		return errors.New("SMTP_HOST and SMTP_PORT must be configured")
+	}
+	from := strings.TrimSpace(os.Getenv("SMTP_FROM"))
+	if from == "" {
+		from = strings.TrimSpace(os.Getenv("FROM_ADDRESS"))
+	}
+	if from == "" {
+		from = "noreply@polygraph.ae"
+	}
+
+	subject = sanitizeHeader(subject)
+	toEmail = sanitizeHeader(toEmail)
+	from = sanitizeHeader(from)
+
+	mixBoundary := fmt.Sprintf("mix_%d", time.Now().UnixNano())
+	altBoundary := fmt.Sprintf("alt_%d", time.Now().UnixNano())
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", from)
+	fmt.Fprintf(&b, "To: %s\r\n", toEmail)
+	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	b.WriteString("MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", mixBoundary)
+
+	// Body parts
+	fmt.Fprintf(&b, "--%s\r\n", mixBoundary)
+	fmt.Fprintf(&b, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", altBoundary)
+
+	// Plain text body
+	fmt.Fprintf(&b, "--%s\r\n", altBoundary)
+	b.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n\r\n")
+	b.WriteString(textBody + "\r\n")
+
+	// HTML body
+	fmt.Fprintf(&b, "--%s\r\n", altBoundary)
+	b.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n\r\n")
+	b.WriteString(htmlBody(textBody) + "\r\n")
+	fmt.Fprintf(&b, "--%s--\r\n\r\n", altBoundary)
+
+	// Attachment part
+	fmt.Fprintf(&b, "--%s\r\n", mixBoundary)
+	fmt.Fprintf(&b, "Content-Type: application/pdf; name=%q\r\n", attachmentName)
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
+	fmt.Fprintf(&b, "Content-Disposition: attachment; filename=%q\r\n\r\n", attachmentName)
+
+	// Write base64 encoded content with lines <= 76 characters for SMTP compliance
+	encoded := base64.StdEncoding.EncodeToString(attachmentBytes)
+	for i := 0; i < len(encoded); i += 76 {
+		end := i + 76
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		b.WriteString(encoded[i:end] + "\r\n")
+	}
+	b.WriteString("\r\n")
+	fmt.Fprintf(&b, "--%s--\r\n", mixBoundary)
+
+	msg := []byte(b.String())
+
+	addr := net.JoinHostPort(host, port)
+	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+	if err != nil {
+		return fmt.Errorf("smtp dial %s: %w", addr, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(opDeadline))
+
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return fmt.Errorf("smtp client: %w", err)
+	}
+	defer c.Close()
+
+	if err := c.Hello("polygraph.ae"); err != nil {
+		return fmt.Errorf("smtp helo: %w", err)
+	}
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+			return fmt.Errorf("smtp starttls: %w", err)
+		}
+	}
+	if user := strings.TrimSpace(os.Getenv("SMTP_USER")); user != "" {
+		if err := c.Auth(smtp.PlainAuth("", user, os.Getenv("SMTP_PASS"), host)); err != nil {
+			return fmt.Errorf("smtp auth: %w", err)
+		}
+	}
 	if err := c.Mail(from); err != nil {
 		return fmt.Errorf("smtp mail from: %w", err)
 	}

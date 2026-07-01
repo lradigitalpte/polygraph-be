@@ -27,4 +27,5 @@ type AccountLedgerEntry struct {
 	BalanceDue    float64   `json:"balance_due"`
 	Status        string    `json:"status"`
 	PaymentMode   string    `json:"payment_mode,omitempty"`
+	Currency      string    `json:"currency,omitempty"`
 }

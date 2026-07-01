@@ -48,6 +48,7 @@ import (
 	"my-app/internal/modules/settings"
 	"my-app/internal/modules/subjects"
 	"my-app/internal/modules/users"
+	"my-app/internal/modules/inventory"
 	"my-app/internal/storage"
 
 	"github.com/joho/godotenv"
@@ -118,6 +119,8 @@ func main() {
 		&forms.FormRequest{},
 		&intake.IntakeRequest{},
 		&settings.OrganizationSettings{},
+		&inventory.InventoryItem{},
+		&exams.SecureReportShare{},
 	)
 	if err != nil {
 		logger.Warn("Database migration completed with warnings (some columns may already exist)", zap.Error(err))
@@ -246,6 +249,9 @@ func main() {
 	formsService := forms.NewService()
 	formsCtrl := forms.NewController(formsService)
 
+	inventoryService := inventory.NewService()
+	inventoryCtrl := inventory.NewController(inventoryService)
+
 	// Public API (no auth) — client form fill links.
 	// StrictRateLimiter applied here because these routes have no session requirement,
 	// making them the easiest target for automated abuse (form spam, enumeration).
@@ -259,6 +265,7 @@ func main() {
 
 	// Public document-view links (clients open these to download files sent to them).
 	appointments.RegisterPublicRoutes(publicAPI, appCtrl)
+	exams.RegisterPublicRoutes(publicAPI, examCtrl)
 
 	// Cron endpoint (no session auth; guarded by the X-Cron-Secret header inside
 	// the handler). Hit on a schedule by an external scheduler (cron-job.org) to
@@ -282,6 +289,7 @@ func main() {
 		auditlogs.RegisterRoutes(api, auditCtrl, middleware.PermissionMiddleware)
 		forms.RegisterRoutes(api, formsCtrl, middleware.PermissionMiddleware)
 		intake.RegisterRoutes(api, intakeCtrl, middleware.PermissionMiddleware)
+		inventory.RegisterRoutes(api, inventoryCtrl, middleware.PermissionMiddleware)
 	}
 
 	// Setup server. Timeouts guard against slow-client (Slowloris) attacks

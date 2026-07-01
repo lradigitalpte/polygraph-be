@@ -297,3 +297,100 @@ func (ctrl *Controller) StartDocumentation(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, exam)
 }
+
+func (ctrl *Controller) ListSecureShares(c *gin.Context) {
+	search := c.Query("search")
+	clientIDStr := c.Query("client_id")
+
+	var clientID uint
+	if clientIDStr != "" {
+		id, err := strconv.ParseUint(clientIDStr, 10, 32)
+		if err == nil {
+			clientID = uint(id)
+		}
+	}
+
+	shares, err := ctrl.service.ListSecureShares(search, clientID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch secure shares"})
+		return
+	}
+	c.JSON(http.StatusOK, shares)
+}
+
+func (ctrl *Controller) CreateSecureShare(c *gin.Context) {
+	var input struct {
+		ExamReportID   uint   `json:"exam_report_id"`
+		ExamID         uint   `json:"exam_id"`
+		RecipientEmail string `json:"recipient_email"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if input.RecipientEmail == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "recipient_email is required"})
+		return
+	}
+
+	reportID := input.ExamReportID
+	if reportID == 0 && input.ExamID > 0 {
+		var report ExamReport
+		if err := ctrl.service.db.Where("exam_id = ?", input.ExamID).First(&report).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "No report has been written for this exam yet"})
+			return
+		}
+		reportID = report.ID
+	}
+
+	if reportID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exam_report_id or exam_id is required"})
+		return
+	}
+
+	share, err := ctrl.service.CreateSecureShare(reportID, input.RecipientEmail)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, share)
+}
+
+func (ctrl *Controller) GetSecureShare(c *gin.Context) {
+	token := c.Param("token")
+	share, err := ctrl.service.GetSecureReportShareByToken(token)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Shared report not found or expired"})
+		return
+	}
+	c.JSON(http.StatusOK, share)
+}
+
+func (ctrl *Controller) RegenerateSecureShare(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid share ID"})
+		return
+	}
+
+	share, err := ctrl.service.RegenerateSecureReportShare(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, share)
+}
+
+func (ctrl *Controller) GetConsolidatedStats(c *gin.Context) {
+	stats, err := ctrl.service.GetConsolidatedReportStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch stats"})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}

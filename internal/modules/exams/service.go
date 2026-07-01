@@ -3,16 +3,22 @@ package exams
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
+	"os"
 	"strconv"
+	"strings"
+	"my-app/internal/email"
 	"my-app/internal/storage"
 	"my-app/internal/utils"
 	"time"
 
+	"github.com/jung-kurt/gofpdf"
 	"gorm.io/gorm"
 )
 
@@ -365,4 +371,340 @@ func (s *Service) StartDocumentationForAppointment(appointmentID string) (*Exam,
 	}
 
 	return s.GetExamByID(strconv.FormatUint(uint64(exam.ID), 10))
+}
+
+func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string) ([]byte, error) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetProtection(gofpdf.CnProtectPrint, password, password)
+	pdf.AddPage()
+	
+	// Branded dark top bar simulation
+	pdf.SetFillColor(0, 0, 0)
+	pdf.Rect(0, 0, 210, 30, "F")
+	
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetFont("Helvetica", "B", 16)
+	pdf.Text(15, 20, "POLYGRAPH FORENSIC SYSTEM")
+	
+	// Report Details Section
+	pdf.SetTextColor(0, 0, 0)
+	pdf.Ln(25) // move below header
+	
+	pdf.SetFont("Helvetica", "B", 14)
+	pdf.Cell(0, 10, "Confidential Forensic Examination Report")
+	pdf.Ln(12)
+	
+	pdf.SetFont("Helvetica", "B", 10)
+	pdf.Cell(40, 7, "Examinee Name:")
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.Cell(0, 7, subjectName)
+	pdf.Ln(7)
+	
+	pdf.SetFont("Helvetica", "B", 10)
+	pdf.Cell(40, 7, "Exam Type:")
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.Cell(0, 7, examType)
+	pdf.Ln(7)
+	
+	pdf.SetFont("Helvetica", "B", 10)
+	pdf.Cell(40, 7, "Requesting Client:")
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.Cell(0, 7, clientName)
+	pdf.Ln(7)
+	
+	pdf.SetFont("Helvetica", "B", 10)
+	pdf.Cell(40, 7, "Verdict:")
+	pdf.SetFont("Helvetica", "B", 10)
+	if verdict == "DI" {
+		pdf.SetTextColor(200, 0, 0) // red
+		pdf.Cell(0, 7, "Deception Indicated (DI)")
+	} else if verdict == "NDI" {
+		pdf.SetTextColor(0, 150, 0) // green
+		pdf.Cell(0, 7, "No Deception Indicated (NDI)")
+	} else {
+		pdf.SetTextColor(100, 100, 100) // gray
+		pdf.Cell(0, 7, "Inconclusive")
+	}
+	pdf.SetTextColor(0, 0, 0)
+	pdf.Ln(12)
+	
+	// Divider
+	pdf.Line(10, pdf.GetY(), 200, pdf.GetY())
+	pdf.Ln(8)
+	
+	// Report Content
+	pdf.SetFont("Helvetica", "B", 11)
+	pdf.Cell(0, 7, "Professional Findings & Conclusion:")
+	pdf.Ln(8)
+	
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.MultiCell(0, 6, content, "", "L", false)
+	
+	pdf.Ln(15)
+	pdf.SetFont("Helvetica", "I", 9)
+	pdf.Cell(0, 5, "This document is encrypted for strict confidentiality and data protection.")
+	pdf.Ln(5)
+	pdf.Cell(0, 5, fmt.Sprintf("Report Generated on %s", time.Now().Format("Jan 02, 2006")))
+	
+	var buf bytes.Buffer
+	err := pdf.Output(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func generatePasscode() string {
+	const chars = "0123456789"
+	result := make([]byte, 6)
+	for i := 0; i < 6; i++ {
+		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		result[i] = chars[num.Int64()]
+	}
+	return string(result)
+}
+
+func generateToken() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *Service) GetConsolidatedReportStats() (map[string]any, error) {
+	var totalShares int64
+	var totalNDI int64
+	var totalDI int64
+	var totalInconclusive int64
+
+	// Count shares
+	if err := s.db.Model(&SecureReportShare{}).Count(&totalShares).Error; err != nil {
+		return nil, err
+	}
+
+	// Count report verdicts
+	if err := s.db.Model(&ExamReport{}).Where("verdict = ?", "NDI").Count(&totalNDI).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&ExamReport{}).Where("verdict = ?", "DI").Count(&totalDI).Error; err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&ExamReport{}).Where("verdict = ? OR verdict = ?", "Inconclusive", "INCONCLUSIVE").Count(&totalInconclusive).Error; err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"total_reports":      totalShares,
+		"ndi_count":          totalNDI,
+		"di_count":           totalDI,
+		"inconclusive_count": totalInconclusive,
+	}, nil
+}
+
+func (s *Service) ListSecureShares(search string, clientID uint) ([]SecureReportShare, error) {
+	var shares []SecureReportShare
+	query := s.db.Preload("Subject").Preload("ExamReport")
+
+	if clientID > 0 {
+		query = query.Where("client_id = ?", clientID)
+	}
+
+	if search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		query = query.Joins("JOIN subjects ON subjects.id = secure_report_shares.subject_id").
+			Where("LOWER(subjects.first_name) LIKE ? OR LOWER(subjects.last_name) LIKE ? OR LOWER(secure_report_shares.recipient_email) LIKE ?", like, like, like)
+	}
+
+	err := query.Order("created_at DESC").Find(&shares).Error
+	return shares, err
+}
+
+func (s *Service) CreateSecureShare(reportID uint, recipientEmail string) (*SecureReportShare, error) {
+	// Fetch report
+	var report ExamReport
+	if err := s.db.First(&report, reportID).Error; err != nil {
+		return nil, fmt.Errorf("report not found: %w", err)
+	}
+
+	// Fetch exam details to build name/metadata
+	var exam Exam
+	if err := s.db.Preload("Subject").Preload("ExamType").First(&exam, report.ExamID).Error; err != nil {
+		return nil, fmt.Errorf("exam not found: %w", err)
+	}
+
+	// Decrypt report content
+	decryptedContent, err := utils.Decrypt(report.EncryptedReport)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt report: %w", err)
+	}
+
+	// Fetch client name from database dynamically
+	var clientName string = "Corporate Client"
+	type clientTemp struct {
+		Name string
+	}
+	var cTemp clientTemp
+	if err := s.db.Table("clients").Select("name").Where("id = ?", exam.ClientID).Scan(&cTemp).Error; err == nil && cTemp.Name != "" {
+		clientName = cTemp.Name
+	}
+
+	// Generate passcode & token
+	passcode := generatePasscode()
+	token := generateToken()
+
+	// Generate PDF
+	subjectName := fmt.Sprintf("%s %s", exam.Subject.FirstName, exam.Subject.LastName)
+	examTypeName := exam.Type
+	if examTypeName == "" && exam.ExamType != nil {
+		examTypeName = exam.ExamType.Name
+	}
+	if examTypeName == "" {
+		examTypeName = "Polygraph Forensic Exam"
+	}
+
+	pdfBytes, err := GenerateEncryptedPDF(report.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate encrypted PDF: %w", err)
+	}
+
+	// Upload PDF to S3/Storage
+	fileName := fmt.Sprintf("share-report-%d-%s.pdf", reportID, token[:8])
+	key := fmt.Sprintf("exams/reports/%s", fileName)
+	pdfURL, err := s.storage.UploadFile(context.Background(), key, bytes.NewReader(pdfBytes), "application/pdf")
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload PDF to storage: %w", err)
+	}
+
+	// Save GORM record
+	share := SecureReportShare{
+		ExamReportID:   reportID,
+		ClientID:       exam.ClientID,
+		SubjectID:      exam.SubjectID,
+		RecipientEmail: recipientEmail,
+		Token:          token,
+		Password:       passcode,
+		PdfURL:         pdfURL,
+		Status:         "sent",
+		ExpiresAt:      time.Now().Add(7 * 24 * time.Hour), // 7 days expiration
+	}
+
+	if err := s.db.Create(&share).Error; err != nil {
+		return nil, fmt.Errorf("failed to save share: %w", err)
+	}
+
+	// Email delivery
+	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	secureLink := fmt.Sprintf("%s/shared/report/%s", strings.TrimSuffix(frontendURL, "/"), token)
+
+	subjectLine := fmt.Sprintf("CONFIDENTIAL: Polygraph Report for %s", subjectName)
+	emailBody := fmt.Sprintf(
+		"Hello,\n\nYour polygraph forensic report for %s is attached to this email as a password-protected PDF.\n\nTo view the password and securely unlock this document, please click the link below:\n%s\n\nFor security reasons, this link will expire in 7 days.\n\nBest regards,\nPolygraph Forensic System Team",
+		subjectName,
+		secureLink,
+	)
+
+	// Send it!
+	_ = email.SendWithAttachment(recipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+
+	return &share, nil
+}
+
+func (s *Service) GetSecureReportShareByToken(token string) (*SecureReportShare, error) {
+	var share SecureReportShare
+	err := s.db.Preload("Subject").Preload("ExamReport").Where("token = ? AND expires_at > ?", token, time.Now()).First(&share).Error
+	if err != nil {
+		return nil, err
+	}
+	return &share, nil
+}
+
+func (s *Service) RegenerateSecureReportShare(id uint) (*SecureReportShare, error) {
+	var share SecureReportShare
+	if err := s.db.Preload("Subject").Preload("ExamReport").First(&share, id).Error; err != nil {
+		return nil, err
+	}
+
+	// Fetch exam to get decryptions
+	var exam Exam
+	if err := s.db.Preload("Subject").Preload("ExamType").First(&exam, share.ExamReport.ExamID).Error; err != nil {
+		return nil, err
+	}
+
+	decryptedContent, err := utils.Decrypt(share.ExamReport.EncryptedReport)
+	if err != nil {
+		return nil, err
+	}
+
+	var clientName string = "Corporate Client"
+	type clientTemp struct {
+		Name string
+	}
+	var cTemp clientTemp
+	if err := s.db.Table("clients").Select("name").Where("id = ?", exam.ClientID).Scan(&cTemp).Error; err == nil && cTemp.Name != "" {
+		clientName = cTemp.Name
+	}
+
+	// Rotate passcode & token
+	passcode := generatePasscode()
+	token := generateToken()
+
+	// Regenerate PDF
+	subjectName := fmt.Sprintf("%s %s", exam.Subject.FirstName, exam.Subject.LastName)
+	examTypeName := exam.Type
+	if examTypeName == "" && exam.ExamType != nil {
+		examTypeName = exam.ExamType.Name
+	}
+	if examTypeName == "" {
+		examTypeName = "Polygraph Forensic Exam"
+	}
+
+	pdfBytes, err := GenerateEncryptedPDF(share.ExamReport.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode)
+	if err != nil {
+		return nil, err
+	}
+
+	// Upload rotated PDF
+	fileName := fmt.Sprintf("share-report-%d-%s.pdf", share.ExamReportID, token[:8])
+	key := fmt.Sprintf("exams/reports/%s", fileName)
+	pdfURL, err := s.storage.UploadFile(context.Background(), key, bytes.NewReader(pdfBytes), "application/pdf")
+	if err != nil {
+		return nil, err
+	}
+
+	// Update record
+	updates := map[string]any{
+		"token":      token,
+		"password":   passcode,
+		"pdf_url":    pdfURL,
+		"status":     "sent",
+		"expires_at": time.Now().Add(7 * 24 * time.Hour),
+	}
+
+	if err := s.db.Model(&share).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+
+	// Fetch updated record
+	if err := s.db.Preload("Subject").Preload("ExamReport").First(&share, id).Error; err != nil {
+		return nil, err
+	}
+
+	// Send email again
+	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	secureLink := fmt.Sprintf("%s/shared/report/%s", strings.TrimSuffix(frontendURL, "/"), token)
+
+	subjectLine := fmt.Sprintf("CONFIDENTIAL (UPDATED): Polygraph Report for %s", subjectName)
+	emailBody := fmt.Sprintf(
+		"Hello,\n\nYour polygraph forensic report link has been regenerated. The report is attached to this email as a password-protected PDF.\n\nTo view the new password and unlock the document, please click the secure link below:\n%s\n\nFor security reasons, this link will expire in 7 days.\n\nBest regards,\nPolygraph Forensic System Team",
+		secureLink,
+	)
+
+	_ = email.SendWithAttachment(share.RecipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+
+	return &share, nil
 }

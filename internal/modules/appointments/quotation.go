@@ -25,4 +25,5 @@ type Quotation struct {
 	SentToEmail     string         `gorm:"size:255" json:"sent_to_email,omitempty"`
 	EmailSubject    string         `gorm:"size:255" json:"email_subject,omitempty"`
 	EmailBody       string         `gorm:"type:text" json:"email_body,omitempty"`
+	Currency        string         `gorm:"size:10;default:'USD'" json:"currency"`
 }

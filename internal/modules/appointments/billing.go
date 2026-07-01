@@ -111,6 +111,14 @@ func (s *Service) ensureInvoiceForAppointment(appt *Appointment) error {
 		return nil
 	}
 
+	defaultCurrency := "USD"
+	var org struct {
+		Currency string `gorm:"column:currency"`
+	}
+	if err := s.db.Table("organization_settings").Select("currency").Where("id = ?", 1).First(&org).Error; err == nil && org.Currency != "" {
+		defaultCurrency = org.Currency
+	}
+
 	appointmentID := appt.ID
 	quote := &Quotation{
 		ClientID:        appt.ClientID,
@@ -119,6 +127,7 @@ func (s *Service) ensureInvoiceForAppointment(appt *Appointment) error {
 		Amount:          appt.ExamFee,
 		CollectedAmount: appt.CollectedAmount,
 		Status:          paymentStatusToQuoteStatus(appt.PaymentStatus, appt.CollectedAmount, appt.ExamFee),
+		Currency:        defaultCurrency,
 	}
 	if err := s.CreateQuotation(quote); err != nil {
 		return err
@@ -159,6 +168,14 @@ func (s *Service) syncAppointmentFromQuotation(quotationID uint) error {
 
 func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, AccountSummary, error) {
 	trimmedClientID := strings.TrimSpace(clientID)
+
+	defaultCurrency := "USD"
+	var org struct {
+		Currency string `gorm:"column:currency"`
+	}
+	if err := s.db.Table("organization_settings").Select("currency").Where("id = ?", 1).First(&org).Error; err == nil && org.Currency != "" {
+		defaultCurrency = org.Currency
+	}
 
 	var appointments []Appointment
 	apptQuery := s.db.Preload("Client").Order("scheduled_at DESC")
@@ -239,6 +256,10 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 
 		qid := quote.ID
 		aid := appt.ID
+		entryCurrency := quote.Currency
+		if entryCurrency == "" {
+			entryCurrency = defaultCurrency
+		}
 		addEntry(AccountLedgerEntry{
 			ID:            quote.ID,
 			Source:        "booking",
@@ -256,6 +277,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			BalanceDue:    balance,
 			Status:        appt.PaymentStatus,
 			PaymentMode:   appt.PaymentMode,
+			Currency:      entryCurrency,
 		})
 	}
 
@@ -293,6 +315,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			BalanceDue:    balance,
 			Status:        appt.PaymentStatus,
 			PaymentMode:   appt.PaymentMode,
+			Currency:      defaultCurrency,
 		})
 	}
 
@@ -311,6 +334,10 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 		}
 
 		qid := quote.ID
+		entryCurrency := quote.Currency
+		if entryCurrency == "" {
+			entryCurrency = defaultCurrency
+		}
 		addEntry(AccountLedgerEntry{
 			ID:          quote.ID,
 			Source:      "quote",
@@ -326,6 +353,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			PaidAmount:  quote.CollectedAmount,
 			BalanceDue:  balance,
 			Status:      quote.Status,
+			Currency:    entryCurrency,
 		})
 	}
 
