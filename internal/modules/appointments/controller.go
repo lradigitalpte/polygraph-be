@@ -465,6 +465,34 @@ func (ctrl *Controller) BulkSchedule(c *gin.Context) {
 	})
 }
 
+// BulkImportHistorical imports historical completed exam sessions.
+func (ctrl *Controller) BulkImportHistorical(c *gin.Context) {
+	var body struct {
+		ClientID   uint                  `json:"client_id"   binding:"required"`
+		ExaminerID uint                  `json:"examiner_id" binding:"required"`
+		ExamFee    float64               `json:"exam_fee"`
+		Rows       []HistoricalImportRow `json:"rows"        binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	imported, err := ctrl.service.BulkImportHistorical(
+		body.ClientID,
+		body.ExaminerID,
+		body.ExamFee,
+		body.Rows,
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"imported": imported,
+	})
+}
+
 // GetAppointments godoc
 // @Summary Get all appointments
 // @Tags business
