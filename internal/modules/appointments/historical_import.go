@@ -17,15 +17,19 @@ import (
 )
 
 type HistoricalImportRow struct {
-	FirstName    string   `json:"first_name"`
-	LastName     string   `json:"last_name"`
-	Phone        string   `json:"phone"`
-	EmployeeRef  string   `json:"employee_ref"`
-	ScheduledAt  string   `json:"scheduled_at"` // RFC3339 formatted
-	Status       string   `json:"status"`       // "Completed" / "Failed" / "no show"
-	Verdict      string   `json:"verdict"`      // "NDI" / "DI" / "Inconclusive"
-	ExamTypeID   *uint    `json:"exam_type_id"`
-	Price        *float64 `json:"price"`
+	FirstName      string   `json:"first_name"`
+	LastName       string   `json:"last_name"`
+	Phone          string   `json:"phone"`
+	EmployeeRef    string   `json:"employee_ref"`
+	ScheduledAt    string   `json:"scheduled_at"` // RFC3339 formatted
+	Status         string   `json:"status"`       // "Completed" / "Failed" / "no show"
+	Verdict        string   `json:"verdict"`      // "NDI" / "DI" / "Inconclusive"
+	ExamTypeID     *uint    `json:"exam_type_id"`
+	Price          *float64 `json:"price"`
+	Gender         string   `json:"gender"`
+	SpokenLanguage string   `json:"spoken_language"`
+	Experience     string   `json:"experience"`
+	Email          string   `json:"email"`
 }
 
 func (s *Service) BulkImportHistorical(
@@ -63,13 +67,36 @@ func (s *Service) BulkImportHistorical(
 			err := tx.Where("client_id = ? AND first_name = ? AND last_name = ?", clientID, first, last).First(&existingSubj).Error
 			if err == nil {
 				subj = existingSubj
+				// Update blank details if any
+				updates := map[string]interface{}{}
+				if subj.Phone == "" && row.Phone != "" {
+					updates["phone"] = strings.TrimSpace(row.Phone)
+				}
+				if subj.EmployeeRef == "" && row.EmployeeRef != "" {
+					updates["employee_ref"] = strings.TrimSpace(row.EmployeeRef)
+				}
+				if subj.Gender == "" && row.Gender != "" {
+					updates["gender"] = strings.TrimSpace(row.Gender)
+				}
+				if subj.SpokenLanguage == "" && row.SpokenLanguage != "" {
+					updates["spoken_language"] = strings.TrimSpace(row.SpokenLanguage)
+				}
+				if subj.Email == "" && row.Email != "" {
+					updates["email"] = strings.TrimSpace(row.Email)
+				}
+				if len(updates) > 0 {
+					tx.Model(&subj).Updates(updates)
+				}
 			} else {
 				subj = subjects.Subject{
-					ClientID:    &clientID,
-					FirstName:   first,
-					LastName:    last,
-					Phone:       strings.TrimSpace(row.Phone),
-					EmployeeRef: strings.TrimSpace(row.EmployeeRef),
+					ClientID:       &clientID,
+					FirstName:      first,
+					LastName:       last,
+					Phone:          strings.TrimSpace(row.Phone),
+					EmployeeRef:    strings.TrimSpace(row.EmployeeRef),
+					Gender:         strings.TrimSpace(row.Gender),
+					SpokenLanguage: strings.TrimSpace(row.SpokenLanguage),
+					Email:          strings.TrimSpace(row.Email),
 				}
 				if err := tx.Create(&subj).Error; err != nil {
 					return fmt.Errorf("row %d: failed to create subject: %w", i+1, err)
@@ -109,6 +136,21 @@ func (s *Service) BulkImportHistorical(
 				}
 			}
 
+			// Format notes dynamically to preserve gender, language, and experience
+			noteParts := []string{
+				fmt.Sprintf("Imported historical test record %s (%s)", row.EmployeeRef, examTypeName),
+			}
+			if row.Experience != "" {
+				noteParts = append(noteParts, fmt.Sprintf("Experience: %s", row.Experience))
+			}
+			if row.SpokenLanguage != "" {
+				noteParts = append(noteParts, fmt.Sprintf("Language: %s", row.SpokenLanguage))
+			}
+			if row.Gender != "" {
+				noteParts = append(noteParts, fmt.Sprintf("Gender: %s", row.Gender))
+			}
+			apptNotes := strings.Join(noteParts, " | ")
+
 			// 3. Create Appointment
 			appt := Appointment{
 				ClientID:        clientID,
@@ -121,7 +163,7 @@ func (s *Service) BulkImportHistorical(
 				PaymentStatus:   paymentStatus,
 				CollectedAmount: collectedAmount,
 				Status:          apptStatus,
-				Notes:           fmt.Sprintf("Imported historical test record %s (%s)", row.EmployeeRef, examTypeName),
+				Notes:           apptNotes,
 			}
 			if err := tx.Create(&appt).Error; err != nil {
 				return fmt.Errorf("row %d: failed to create appointment: %w", i+1, err)
@@ -218,8 +260,10 @@ func (s *Service) BulkImportHistorical(
 				hashSum := sha256.Sum256([]byte(encrypted))
 				hashStr := hex.EncodeToString(hashSum[:])
 
+				// Explicit struct mapping without standard gorm.Model to prevent SQLSTATE 42703 (updated_at does not exist)
 				type ExamReportTemp struct {
-					gorm.Model
+					ID              uint `gorm:"primarykey"`
+					CreatedAt       time.Time
 					ExamID          uint `gorm:"uniqueIndex"`
 					Verdict         string
 					EncryptedReport string
@@ -227,6 +271,7 @@ func (s *Service) BulkImportHistorical(
 					IsLocked        bool
 				}
 				reportRec := ExamReportTemp{
+					CreatedAt:       time.Now(),
 					ExamID:          examRec.ID,
 					Verdict:         row.Verdict,
 					EncryptedReport: encrypted,
