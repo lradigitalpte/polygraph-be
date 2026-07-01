@@ -32,6 +32,14 @@ type HistoricalImportRow struct {
 	Email          string   `json:"email"`
 }
 
+func truncate(s string, limit int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > limit {
+		return s[:limit]
+	}
+	return s
+}
+
 func (s *Service) BulkImportHistorical(
 	clientID uint,
 	examinerID uint,
@@ -53,8 +61,8 @@ func (s *Service) BulkImportHistorical(
 		for i, row := range rows {
 			// 1. Create or Find Subject
 			var subj subjects.Subject
-			first := strings.TrimSpace(row.FirstName)
-			last := strings.TrimSpace(row.LastName)
+			first := truncate(row.FirstName, 100)
+			last := truncate(row.LastName, 100)
 			if first == "" {
 				first = "Examinee"
 			}
@@ -70,19 +78,19 @@ func (s *Service) BulkImportHistorical(
 				// Update blank details if any
 				updates := map[string]interface{}{}
 				if subj.Phone == "" && row.Phone != "" {
-					updates["phone"] = strings.TrimSpace(row.Phone)
+					updates["phone"] = truncate(row.Phone, 50)
 				}
 				if subj.EmployeeRef == "" && row.EmployeeRef != "" {
-					updates["employee_ref"] = strings.TrimSpace(row.EmployeeRef)
+					updates["employee_ref"] = truncate(row.EmployeeRef, 100)
 				}
 				if subj.Gender == "" && row.Gender != "" {
-					updates["gender"] = strings.TrimSpace(row.Gender)
+					updates["gender"] = truncate(row.Gender, 20)
 				}
 				if subj.SpokenLanguage == "" && row.SpokenLanguage != "" {
-					updates["spoken_language"] = strings.TrimSpace(row.SpokenLanguage)
+					updates["spoken_language"] = truncate(row.SpokenLanguage, 100)
 				}
 				if subj.Email == "" && row.Email != "" {
-					updates["email"] = strings.TrimSpace(row.Email)
+					updates["email"] = truncate(row.Email, 255)
 				}
 				if len(updates) > 0 {
 					tx.Model(&subj).Updates(updates)
@@ -92,11 +100,11 @@ func (s *Service) BulkImportHistorical(
 					ClientID:       &clientID,
 					FirstName:      first,
 					LastName:       last,
-					Phone:          strings.TrimSpace(row.Phone),
-					EmployeeRef:    strings.TrimSpace(row.EmployeeRef),
-					Gender:         strings.TrimSpace(row.Gender),
-					SpokenLanguage: strings.TrimSpace(row.SpokenLanguage),
-					Email:          strings.TrimSpace(row.Email),
+					Phone:          truncate(row.Phone, 50),
+					EmployeeRef:    truncate(row.EmployeeRef, 100),
+					Gender:         truncate(row.Gender, 20),
+					SpokenLanguage: truncate(row.SpokenLanguage, 100),
+					Email:          truncate(row.Email, 255),
 				}
 				if err := tx.Create(&subj).Error; err != nil {
 					return fmt.Errorf("row %d: failed to create subject: %w", i+1, err)

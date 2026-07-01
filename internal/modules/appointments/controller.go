@@ -881,3 +881,48 @@ func (ctrl *Controller) GetPublicDocumentShare(c *gin.Context) {
 		"expires_at":     share.ExpiresAt,
 	})
 }
+
+type BulkEditPriceTarget struct {
+	Source        string `json:"source"`
+	ID            uint   `json:"id"`
+	AppointmentID *uint  `json:"appointment_id"`
+	QuotationID   *uint  `json:"quotation_id"`
+}
+
+func (ctrl *Controller) BulkEditPrices(c *gin.Context) {
+	var input struct {
+		Targets  []BulkEditPriceTarget `json:"targets" binding:"required"`
+		NewPrice float64               `json:"new_price" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	targets := make([]struct {
+		Source        string
+		ID            uint
+		AppointmentID *uint
+		QuotationID   *uint
+	}, len(input.Targets))
+	for i, t := range input.Targets {
+		targets[i] = struct {
+			Source        string
+			ID            uint
+			AppointmentID *uint
+			QuotationID   *uint
+		}{
+			Source:        t.Source,
+			ID:            t.ID,
+			AppointmentID: t.AppointmentID,
+			QuotationID:   t.QuotationID,
+		}
+	}
+
+	if err := ctrl.service.BulkEditPrices(targets, input.NewPrice); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Successfully updated transaction prices"})
+}

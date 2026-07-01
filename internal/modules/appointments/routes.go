@@ -50,6 +50,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 	b := router.Group("/billing")
 	{
 		b.GET("/ledger", permissionMiddleware("appointment:view"), ctrl.GetBillingLedger)
+		b.POST("/bulk-edit-prices", permissionMiddleware("payment:manage"), ctrl.BulkEditPrices)
 	}
 
 	q := router.Group("/quotations")

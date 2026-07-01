@@ -494,7 +494,7 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 
 	allowed := map[string]bool{
 		"notes": true, "status": true, "questions_prepared": true, "exam_id": true,
-		"scheduled_at": true, "duration": true, "examiner_id": true,
+		"scheduled_at": true, "duration": true, "examiner_id": true, "exam_fee": true,
 	}
 	safe := make(map[string]interface{})
 	for key, value := range updates {
@@ -1215,4 +1215,70 @@ func (s *Service) DeleteQuotation(id string) error {
 		return errors.New("quotation not found")
 	}
 	return nil
+}
+
+func (s *Service) BulkEditPrices(targets []struct {
+	Source        string
+	ID            uint
+	AppointmentID *uint
+	QuotationID   *uint
+}, newPrice float64) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		for _, t := range targets {
+			if t.AppointmentID != nil && *t.AppointmentID > 0 {
+				var appt Appointment
+				if err := tx.First(&appt, *t.AppointmentID).Error; err == nil {
+					updates := map[string]interface{}{
+						"exam_fee": newPrice,
+					}
+					if appt.PaymentStatus == "Paid" || appt.CollectedAmount > 0 {
+						updates["collected_amount"] = newPrice
+					}
+					if err := tx.Model(&appt).Updates(updates).Error; err != nil {
+						return err
+					}
+				}
+			} else if t.QuotationID != nil && *t.QuotationID > 0 {
+				var quote Quotation
+				if err := tx.First(&quote, *t.QuotationID).Error; err == nil {
+					updates := map[string]interface{}{
+						"amount": newPrice,
+					}
+					if quote.Status == "Paid" || quote.CollectedAmount > 0 {
+						updates["collected_amount"] = newPrice
+					}
+					if err := tx.Model(&quote).Updates(updates).Error; err != nil {
+						return err
+					}
+				}
+			} else if t.Source == "booking" || t.Source == "session" {
+				var appt Appointment
+				if err := tx.First(&appt, t.ID).Error; err == nil {
+					updates := map[string]interface{}{
+						"exam_fee": newPrice,
+					}
+					if appt.PaymentStatus == "Paid" || appt.CollectedAmount > 0 {
+						updates["collected_amount"] = newPrice
+					}
+					if err := tx.Model(&appt).Updates(updates).Error; err != nil {
+						return err
+					}
+				}
+			} else if t.Source == "quote" {
+				var quote Quotation
+				if err := tx.First(&quote, t.ID).Error; err == nil {
+					updates := map[string]interface{}{
+						"amount": newPrice,
+					}
+					if quote.Status == "Paid" || quote.CollectedAmount > 0 {
+						updates["collected_amount"] = newPrice
+					}
+					if err := tx.Model(&quote).Updates(updates).Error; err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	})
 }
