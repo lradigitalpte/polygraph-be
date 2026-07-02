@@ -109,7 +109,15 @@ func (s *Service) CreateReport(examID uint, verdict, content string) (*ExamRepor
 	err = s.db.Where("exam_id = ?", examID).First(&report).Error
 	if err == nil {
 		if report.IsLocked {
-			return nil, fmt.Errorf("cannot modify a locked forensic report")
+			// Historical imports were created as locked, but they do not carry
+			// examiner/client signatures yet. Allow the report builder to reopen
+			// those imported records for editing while keeping genuinely signed
+			// reports immutable.
+			if report.SignatureExaminer != "" || report.SignatureClient != "" {
+				return nil, fmt.Errorf("cannot modify a locked forensic report")
+			}
+			report.IsLocked = false
+			report.LockedAt = nil
 		}
 		report.Verdict = verdict
 		report.EncryptedReport = encrypted

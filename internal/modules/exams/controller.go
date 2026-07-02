@@ -127,7 +127,11 @@ func (ctrl *Controller) CreateReport(c *gin.Context) {
 	}
 	report, err := ctrl.service.CreateReport(input.ExamID, input.Verdict, input.Content)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create report"})
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "locked forensic report") {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, report)
