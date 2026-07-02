@@ -1,4 +1,4 @@
-package exams
+﻿package exams
 
 import (
 	"github.com/gin-gonic/gin"
@@ -43,3 +43,4 @@ func RegisterPublicRoutes(router *gin.RouterGroup, ctrl *Controller) {
 		p.GET("/:token", ctrl.GetSecureShare)
 	}
 }
+

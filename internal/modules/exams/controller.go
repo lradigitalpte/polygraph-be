@@ -1,4 +1,4 @@
-package exams
+﻿package exams
 
 import (
 	"fmt"
@@ -145,11 +145,59 @@ func (ctrl *Controller) GetReport(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":         report.ID,
-		"exam_id":    report.ExamID,
-		"verdict":    report.Verdict,
-		"content":    decrypted,
-		"created_at": report.CreatedAt,
+		"id":                  report.ID,
+		"exam_id":             report.ExamID,
+		"verdict":             report.Verdict,
+		"content":             decrypted,
+		"created_at":          report.CreatedAt,
+		"is_locked":           report.IsLocked,
+		"locked_at":           report.LockedAt,
+		"signature_examiner":  report.SignatureExaminer,
+		"signature_client":    report.SignatureClient,
+	})
+}
+
+func (ctrl *Controller) OverrideUnlockReport(c *gin.Context) {
+	examID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid report id"})
+		return
+	}
+
+	var input struct {
+		Reason string `json:"reason" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userVal, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	userID, ok := userVal.(uint)
+	if !ok || userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	report, unlockErr := ctrl.service.UnlockReportForRevision(uint(examID), userID, input.Reason)
+	if unlockErr != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(unlockErr.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": unlockErr.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id": report.ID,
+		"exam_id": report.ExamID,
+		"is_locked": report.IsLocked,
+		"locked_at": report.LockedAt,
 	})
 }
 
@@ -407,3 +455,4 @@ func (ctrl *Controller) GetConsolidatedStats(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, stats)
 }
+

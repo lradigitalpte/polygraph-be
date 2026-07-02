@@ -1,4 +1,4 @@
-package dbseed
+﻿package dbseed
 
 import (
 	"my-app/internal/modules/exams"
@@ -40,6 +40,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 		{Name: "exam:create", Description: "Can schedule/create exams", Group: "Exams"},
 		{Name: "exam:conduct", Description: "Can conduct/record exams", Group: "Exams"},
 		{Name: "exam:report", Description: "Can generate/sign forensic reports", Group: "Exams"},
+		{Name: "exam:report:override", Description: "Can override locked reports for controlled revision", Group: "Exams"},
 		{Name: "examtype:view", Description: "Can view exam types", Group: "Exams"},
 		{Name: "examtype:create", Description: "Can create exam types", Group: "Exams"},
 		{Name: "examtype:edit", Description: "Can edit exam types", Group: "Exams"},
@@ -64,7 +65,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 
 		// Payments / Billing
 		{Name: "payment:view", Description: "Can view payments and financial billing", Group: "Payments"},
-		{Name: "payment:manage", Description: "Can manage billing — collect, edit, and delete invoices", Group: "Payments"},
+		{Name: "payment:manage", Description: "Can manage billing â€” collect, edit, and delete invoices", Group: "Payments"},
 
 		// Reminders
 		{Name: "reminder:view", Description: "Can view and send reminders", Group: "Reminders"},
@@ -80,7 +81,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 	//
 	// NOTE: default role permissions are seeded ONLY when a role has no permissions
 	// yet (first creation). After that, admins manage them via the Roles UI and we
-	// must NOT clobber their changes on every boot. Admin is the exception — it
+	// must NOT clobber their changes on every boot. Admin is the exception â€” it
 	// always gets every permission (including newly added ones).
 
 	// ADMIN: always everything.
@@ -125,3 +126,5 @@ func SeedExamTypes(db *gorm.DB) {
 		db.FirstOrCreate(&examType, exams.ExamType{Name: examType.Name})
 	}
 }
+
+

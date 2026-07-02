@@ -1,4 +1,4 @@
-package exams
+﻿package exams
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"my-app/internal/email"
+	"my-app/internal/models"
 	"my-app/internal/storage"
 	"my-app/internal/utils"
 	"time"
@@ -109,15 +110,7 @@ func (s *Service) CreateReport(examID uint, verdict, content string) (*ExamRepor
 	err = s.db.Where("exam_id = ?", examID).First(&report).Error
 	if err == nil {
 		if report.IsLocked {
-			// Historical imports were created as locked, but they do not carry
-			// examiner/client signatures yet. Allow the report builder to reopen
-			// those imported records for editing while keeping genuinely signed
-			// reports immutable.
-			if report.SignatureExaminer != "" || report.SignatureClient != "" {
-				return nil, fmt.Errorf("cannot modify a locked forensic report")
-			}
-			report.IsLocked = false
-			report.LockedAt = nil
+			return nil, fmt.Errorf("cannot modify a locked forensic report")
 		}
 		report.Verdict = verdict
 		report.EncryptedReport = encrypted
@@ -151,6 +144,61 @@ func (s *Service) GetReport(examID uint) (*ExamReport, string, error) {
 
 	decrypted, err := utils.Decrypt(report.EncryptedReport)
 	return &report, decrypted, err
+}
+
+func (s *Service) UnlockReportForRevision(examID uint, actorID uint, reason string) (*ExamReport, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, fmt.Errorf("override reason is required")
+	}
+
+	var report ExamReport
+	if err := s.db.Where("exam_id = ?", examID).First(&report).Error; err != nil {
+		return nil, err
+	}
+	if !report.IsLocked {
+		return &report, nil
+	}
+
+	now := time.Now()
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&ExamReport{}).
+			Where("id = ?", report.ID).
+			Updates(map[string]any{"is_locked": false, "locked_at": nil, "signature_examiner": "", "signature_client": ""}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&SecureReportShare{}).
+			Where("exam_report_id = ? AND expires_at > ?", report.ID, now).
+			Update("expires_at", now).Error; err != nil {
+			return err
+		}
+
+		payload, _ := json.Marshal(map[string]any{
+			"exam_id": examID,
+			"exam_report_id": report.ID,
+			"reason": reason,
+			"shares_expired_at": now.UTC().Format(time.RFC3339),
+		})
+
+		log := models.AuditLog{
+			UserID: &actorID,
+			Action: "REPORT_OVERRIDE_UNLOCK",
+			Method: "POST",
+			Path: fmt.Sprintf("/api/reports/%d/override-unlock", examID),
+			Status: 200,
+			Payload: string(payload),
+		}
+		return tx.Create(&log).Error
+	}); err != nil {
+		return nil, err
+	}
+
+	var unlocked ExamReport
+	if err := s.db.Where("exam_id = ?", examID).First(&unlocked).Error; err != nil {
+		return nil, err
+	}
+	return &unlocked, nil
 }
 
 // SignAndLockReport adds a signature and locks the report to make it immutable
@@ -912,3 +960,6 @@ func (s *Service) RegenerateSecureReportShare(id uint) (*SecureReportShare, erro
 
 	return &share, nil
 }
+
+
+
