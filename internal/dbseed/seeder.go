@@ -40,6 +40,7 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 		{Name: "exam:create", Description: "Can schedule/create exams", Group: "Exams"},
 		{Name: "exam:conduct", Description: "Can conduct/record exams", Group: "Exams"},
 		{Name: "exam:report", Description: "Can generate/sign forensic reports", Group: "Exams"},
+		{Name: "exam:report:view_locked", Description: "Can view locked final forensic reports", Group: "Exams"},
 		{Name: "exam:report:override", Description: "Can override locked reports for controlled revision", Group: "Exams"},
 		{Name: "examtype:view", Description: "Can view exam types", Group: "Exams"},
 		{Name: "examtype:create", Description: "Can create exam types", Group: "Exams"},

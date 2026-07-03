@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"my-app/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -142,6 +143,10 @@ func (ctrl *Controller) GetReport(c *gin.Context) {
 	report, decrypted, err := ctrl.service.GetReport(uint(examID))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Report not found"})
+		return
+	}
+	if report.IsLocked && !middleware.HasPermission(c, "exam:report:view_locked") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied: requires exam:report:view_locked"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
