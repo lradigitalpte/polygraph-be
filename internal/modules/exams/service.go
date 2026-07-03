@@ -195,7 +195,8 @@ func (s *Service) UnlockReportForRevision(examID uint, actorID uint, reason stri
 
 	now := time.Now()
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&ExamReport{}).
+		if err := tx.Session(&gorm.Session{SkipHooks: true}).
+			Model(&ExamReport{}).
 			Where("id = ?", report.ID).
 			Updates(map[string]any{"is_locked": false, "locked_at": nil, "signature_examiner": "", "signature_client": ""}).Error; err != nil {
 			return err
