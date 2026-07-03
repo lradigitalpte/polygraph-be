@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"my-app/internal/email"
@@ -31,6 +32,38 @@ type Service struct {
 
 func NewService(db *gorm.DB, storage storage.Storage) *Service {
 	return &Service{db: db, storage: storage}
+}
+
+func reportAssetPath(names ...string) string {
+	baseDirs := []string{
+		"assets",
+		filepath.Join("my-app", "assets"),
+		filepath.Join("..", "my-app", "assets"),
+		filepath.Join("frontend", "apps", "web", "public"),
+		filepath.Join("..", "frontend", "apps", "web", "public"),
+	}
+
+	for _, dir := range baseDirs {
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			if _, err := os.Stat(path); err == nil {
+				return path
+			}
+		}
+	}
+
+	return ""
+}
+
+func imageTypeFromPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		return "PNG"
+	case ".jpg", ".jpeg", ".jfif":
+		return "JPEG"
+	default:
+		return ""
+	}
 }
 
 func (s *Service) CreateExam(exam *Exam) error {
@@ -476,8 +509,8 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	// Set header func
 	pdf.SetHeaderFunc(func() {
 		// Draw logo
-		if _, err := os.Stat("assets/logo.png"); err == nil {
-			pdf.Image("assets/logo.png", 15, 12, 45, 0, false, "PNG", 0, "")
+		if logoPath := reportAssetPath("logo.png"); logoPath != "" {
+			pdf.Image(logoPath, 15, 12, 45, 0, false, imageTypeFromPath(logoPath), 0, "")
 		} else {
 			// Fallback text if image not found
 			pdf.SetFont("Helvetica", "B", 12)
@@ -498,11 +531,11 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	pdf.SetFooterFunc(func() {
 		// Draw logos
 		yPos := float64(262)
-		if _, err := os.Stat("assets/americanpolygraphassociation.png"); err == nil {
-			pdf.Image("assets/americanpolygraphassociation.png", 82, yPos, 14, 14, false, "PNG", 0, "")
+		if apaPath := reportAssetPath("americanpolygraphassociation.png"); apaPath != "" {
+			pdf.Image(apaPath, 82, yPos, 14, 14, false, imageTypeFromPath(apaPath), 0, "")
 		}
-		if _, err := os.Stat("assets/singaporeassociationofpolygraph.jpg"); err == nil {
-			pdf.Image("assets/singaporeassociationofpolygraph.jpg", 102, yPos + 1.5, 23, 11, false, "JPEG", 0, "")
+		if sapPath := reportAssetPath("singaporeassociationofpolygraph.jpg", "singaporeassociationofpolygraph.jfif"); sapPath != "" {
+			pdf.Image(sapPath, 102, yPos+1.5, 23, 11, false, imageTypeFromPath(sapPath), 0, "")
 		}
 		
 		pdf.SetTextColor(100, 100, 100)
@@ -602,23 +635,27 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 			pdf.SetFont("Helvetica", "", 9)
 			for idx, q := range reportData.Questions {
 				x, y := pdf.GetX(), pdf.GetY()
-				
-				// Calculate dynamic heights
+
+				questionText := strings.TrimSpace(q.Text)
+				if questionText == "" {
+					questionText = "-"
+				}
+
 				pdf.SetFont("Helvetica", "I", 9)
-				pdf.MultiCell(125, 6, q.Text, "1", "L", false)
-				y2 := pdf.GetY()
-				h := y2 - y
-				
-				// Draw index cell
+				lines := pdf.SplitLines([]byte(questionText), 119)
+				h := float64(len(lines)) * 6
+				if h < 8 {
+					h = 8
+				}
+
 				pdf.SetXY(x, y)
 				pdf.SetFont("Helvetica", "", 9)
 				pdf.CellFormat(15, h, strconv.Itoa(idx+1), "1", 0, "C", false, 0, "")
-				
-				// Draw text cell background or redraw border
+
 				pdf.SetXY(x+15, y)
-				pdf.CellFormat(125, h, "", "1", 0, "L", false, 0, "")
-				
-				// Draw answer
+				pdf.SetFont("Helvetica", "I", 9)
+				pdf.MultiCell(125, 6, questionText, "1", "L", false)
+
 				pdf.SetXY(x+140, y)
 				pdf.SetFont("Helvetica", "B", 9)
 				pdf.CellFormat(40, h, q.Answer, "1", 1, "C", false, 0, "")
