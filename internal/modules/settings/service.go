@@ -14,6 +14,7 @@ import (
 	"my-app/internal/modules/exams"
 	"my-app/internal/modules/forms"
 	"my-app/internal/modules/intake"
+	"my-app/internal/modules/inventory"
 	"my-app/internal/modules/leads"
 	"my-app/internal/modules/subjects"
 )
@@ -110,6 +111,7 @@ func (s *Service) DeleteOrganizationData() error {
 			{&appointments.Quotation{}, "appointment_id"},
 			{&forms.FormRequest{}, "client_document_id"},
 			{&forms.FormRequest{}, "subject_document_id"},
+			{&forms.FormRequest{}, "subject_id"},
 		}
 		for _, fk := range nullableFKs {
 			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).
@@ -127,6 +129,7 @@ func (s *Service) DeleteOrganizationData() error {
 			&appointments.SubjectDocument{},
 			&appointments.ClientDocument{},
 			&exams.Document{},
+			&exams.SecureReportShare{},
 			&exams.ExamReport{},
 			&exams.ExamQuestion{},
 			&exams.ExamPhase{},
@@ -139,6 +142,7 @@ func (s *Service) DeleteOrganizationData() error {
 			&appointments.Client{},
 			&leads.Lead{},
 			&availability.Block{},
+			&inventory.InventoryItem{},
 			&models.AuditLog{},
 			&exams.ExamType{},
 			&forms.FormTemplate{},

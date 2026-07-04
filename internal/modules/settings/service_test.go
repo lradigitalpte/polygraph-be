@@ -17,6 +17,7 @@ import (
 	"my-app/internal/modules/exams"
 	"my-app/internal/modules/forms"
 	"my-app/internal/modules/intake"
+	"my-app/internal/modules/inventory"
 	"my-app/internal/modules/leads"
 	"my-app/internal/modules/rbac"
 	"my-app/internal/modules/subjects"
@@ -49,6 +50,7 @@ func setupDeleteTestDB(t *testing.T) *gorm.DB {
 		&exams.Exam{},
 		&exams.ExamQuestion{},
 		&exams.ExamReport{},
+		&exams.SecureReportShare{},
 		&exams.Document{},
 		&exams.CaseReferral{},
 		&exams.ClinicalAssessment{},
@@ -56,6 +58,7 @@ func setupDeleteTestDB(t *testing.T) *gorm.DB {
 		&forms.FormTemplate{},
 		&forms.FormRequest{},
 		&OrganizationSettings{},
+		&inventory.InventoryItem{},
 	)
 	require.NoError(t, err)
 	require.NoError(t, db.Exec("PRAGMA foreign_keys=ON").Error)
@@ -98,6 +101,17 @@ func setupDeleteTestDB(t *testing.T) *gorm.DB {
 
 	require.NoError(t, db.Create(&OrganizationSettings{
 		ID: singletonID, Name: "Polygraphuae",
+	}).Error)
+
+	var report exams.ExamReport
+	require.NoError(t, db.Create(&exams.ExamReport{
+		ExamID: exam.ID, Verdict: "NDI", EncryptedReport: "encrypted",
+	}).Error)
+	require.NoError(t, db.Where("exam_id = ?", exam.ID).First(&report).Error)
+	require.NoError(t, db.Create(&exams.SecureReportShare{
+		ExamReportID: report.ID, ClientID: client.ID, SubjectID: subject.ID,
+		RecipientEmail: "share@test.com", Token: "share-token-abc", Password: "secret",
+		ExpiresAt: time.Now().Add(48 * time.Hour),
 	}).Error)
 
 	return db
