@@ -162,6 +162,47 @@ func (ctrl *Controller) GetReport(c *gin.Context) {
 	})
 }
 
+func (ctrl *Controller) FinalizeReport(c *gin.Context) {
+	examID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid report id"})
+		return
+	}
+
+	userVal, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	userID, ok := userVal.(uint)
+	if !ok || userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	actorEmail, _ := c.Get("email")
+	emailStr, _ := actorEmail.(string)
+
+	report, finalizeErr := ctrl.service.FinalizeReport(uint(examID), userID, emailStr)
+	if finalizeErr != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(finalizeErr.Error(), "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(finalizeErr.Error(), "already locked") {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": finalizeErr.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":                 report.ID,
+		"exam_id":            report.ExamID,
+		"is_locked":          report.IsLocked,
+		"locked_at":          report.LockedAt,
+		"signature_examiner": report.SignatureExaminer,
+	})
+}
+
 func (ctrl *Controller) OverrideUnlockReport(c *gin.Context) {
 	examID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -389,6 +430,7 @@ func (ctrl *Controller) CreateSecureShare(c *gin.Context) {
 		ExamReportID   uint   `json:"exam_report_id"`
 		ExamID         uint   `json:"exam_id"`
 		RecipientEmail string `json:"recipient_email"`
+		ExpiresInDays  int    `json:"expires_in_days"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -416,7 +458,7 @@ func (ctrl *Controller) CreateSecureShare(c *gin.Context) {
 		return
 	}
 
-	share, err := ctrl.service.CreateSecureShare(reportID, input.RecipientEmail)
+	share, err := ctrl.service.CreateSecureShare(reportID, input.RecipientEmail, input.ExpiresInDays)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -443,7 +485,12 @@ func (ctrl *Controller) RegenerateSecureShare(c *gin.Context) {
 		return
 	}
 
-	share, err := ctrl.service.RegenerateSecureReportShare(uint(id))
+	var input struct {
+		ExpiresInDays int `json:"expires_in_days"`
+	}
+	_ = c.ShouldBindJSON(&input)
+
+	share, err := ctrl.service.RegenerateSecureReportShare(uint(id), input.ExpiresInDays)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

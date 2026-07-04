@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"my-app/internal/models"
 	"my-app/internal/modules/subjects"
 
 	"github.com/glebarez/sqlite"
@@ -38,6 +39,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&CaseReferral{},
 		&ClinicalAssessment{},
 		&ExamPhase{},
+		&models.AuditLog{},
 	)
 	require.NoError(t, err)
 
@@ -109,6 +111,42 @@ func TestService_UploadDocument(t *testing.T) {
 	assert.Equal(t, "document", doc.Type)
 	assert.Contains(t, doc.URL, "mock-url/exams/1/test.txt")
 	assert.NotEmpty(t, doc.Hash) // SHA256 was computed
+}
+
+func TestService_FinalizeReport(t *testing.T) {
+	db := setupTestDB(t)
+	s := NewService(db, &MockStorage{})
+
+	exam := &Exam{ClientID: 1, SubjectID: 1, ExaminerID: 1}
+	require.NoError(t, s.CreateExam(exam))
+
+	_, err := s.CreateReport(exam.ID, "NDI", "Subject is telling the truth")
+	require.NoError(t, err)
+
+	finalized, err := s.FinalizeReport(exam.ID, 1, "examiner@example.com")
+	assert.NoError(t, err)
+	assert.True(t, finalized.IsLocked)
+	assert.NotNil(t, finalized.LockedAt)
+	assert.NotEmpty(t, finalized.SignatureExaminer)
+
+	_, err = s.FinalizeReport(exam.ID, 1, "examiner@example.com")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "already locked")
+}
+
+func TestService_CreateSecureShareRequiresLock(t *testing.T) {
+	db := setupTestDB(t)
+	s := NewService(db, &MockStorage{})
+
+	exam := &Exam{ClientID: 1, SubjectID: 1, ExaminerID: 1}
+	require.NoError(t, s.CreateExam(exam))
+
+	report, err := s.CreateReport(exam.ID, "NDI", "Draft content")
+	require.NoError(t, err)
+
+	_, err = s.CreateSecureShare(report.ID, "client@example.com", 7)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "finalized and locked")
 }
 
 func TestService_CreateAndGetReport(t *testing.T) {

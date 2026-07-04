@@ -167,3 +167,56 @@ func TestService_UpdateStatus(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "confirmed", updatedApp.Status)
 }
+
+func TestService_CreateAppointmentConvertsUSDFeeToAED(t *testing.T) {
+	db := setupTestDB(t)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS organization_settings (
+			id INTEGER PRIMARY KEY,
+			currency TEXT,
+			usd_aed_rate REAL,
+			usd_gbp_rate REAL,
+			usd_eur_rate REAL
+		)
+	`).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO organization_settings (id, currency, usd_aed_rate, usd_gbp_rate, usd_eur_rate)
+		VALUES (1, 'AED', 3.6725, 0.7850, 0.9250)
+	`).Error)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS exam_types (
+			id INTEGER PRIMARY KEY,
+			name TEXT,
+			price REAL,
+			active INTEGER
+		)
+	`).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO exam_types (id, name, price, active) VALUES (1, 'Pre-employment Screening', 450, 1)
+	`).Error)
+
+	s := &Service{db: db}
+	client := &Client{Name: "AED Client", Email: "aed@test.com"}
+	require.NoError(t, s.CreateClient(client))
+	examiner := seedBookableExaminer(t, db)
+	subject := seedSubject(t, db)
+
+	app := &Appointment{
+		ClientID:    client.ID,
+		SubjectID:   subject.ID,
+		ExaminerID:  examiner.ID,
+		ScheduledAt: bookableTime(),
+		Duration:    150,
+		ExamFee:     450,
+		Status:      "pending",
+		Notes:       "Pre-employment Screening\n\nTest booking",
+	}
+	require.NoError(t, s.CreateAppointment(app))
+
+	assert.Equal(t, 1652.63, app.ExamFee)
+
+	var quote Quotation
+	require.NoError(t, db.Where("appointment_id = ?", app.ID).First(&quote).Error)
+	assert.Equal(t, "AED", quote.Currency)
+	assert.Equal(t, 1652.63, quote.Amount)
+}

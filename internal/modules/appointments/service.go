@@ -141,6 +141,7 @@ func (s *Service) CreateAppointment(app *Appointment) error {
 	if err := s.validateAppointment(app); err != nil {
 		return err
 	}
+	s.NormalizeNewAppointmentMoney(app)
 	if err := s.db.Create(app).Error; err != nil {
 		return err
 	}

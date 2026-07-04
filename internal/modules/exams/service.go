@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -233,6 +234,73 @@ func (s *Service) UnlockReportForRevision(examID uint, actorID uint, reason stri
 		return nil, err
 	}
 	return &unlocked, nil
+}
+
+// FinalizeReport marks a written report as immutable after examiner sign-off.
+func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string) (*ExamReport, error) {
+	var report ExamReport
+	if err := s.db.Where("exam_id = ?", examID).First(&report).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("no report has been written for this exam yet")
+		}
+		return nil, err
+	}
+	if report.IsLocked {
+		return nil, fmt.Errorf("report is already locked")
+	}
+	if strings.TrimSpace(report.Verdict) == "" {
+		return nil, fmt.Errorf("report verdict is required before finalizing")
+	}
+	if strings.TrimSpace(report.EncryptedReport) == "" {
+		return nil, fmt.Errorf("report content is required before finalizing")
+	}
+
+	now := time.Now()
+	signaturePayload, _ := json.Marshal(map[string]any{
+		"type":         "examiner_finalize",
+		"user_id":      actorID,
+		"email":        strings.TrimSpace(actorEmail),
+		"finalized_at": now.UTC().Format(time.RFC3339),
+		"report_hash":  report.Hash,
+	})
+	signature := base64.StdEncoding.EncodeToString(signaturePayload)
+
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Session(&gorm.Session{SkipHooks: true}).
+			Model(&ExamReport{}).
+			Where("id = ?", report.ID).
+			Updates(map[string]any{
+				"is_locked":          true,
+				"locked_at":          &now,
+				"signature_examiner": signature,
+			}).Error; err != nil {
+			return err
+		}
+
+		payload, _ := json.Marshal(map[string]any{
+			"exam_id":        examID,
+			"exam_report_id": report.ID,
+			"verdict":        report.Verdict,
+			"report_hash":    report.Hash,
+		})
+		log := models.AuditLog{
+			UserID: &actorID,
+			Action: "REPORT_FINALIZE_LOCK",
+			Method: "POST",
+			Path:   fmt.Sprintf("/api/reports/%d/finalize", examID),
+			Status: 200,
+			Payload: string(payload),
+		}
+		return tx.Create(&log).Error
+	}); err != nil {
+		return nil, err
+	}
+
+	var finalized ExamReport
+	if err := s.db.Where("exam_id = ?", examID).First(&finalized).Error; err != nil {
+		return nil, err
+	}
+	return &finalized, nil
 }
 
 // SignAndLockReport adds a signature and locks the report to make it immutable
@@ -756,6 +824,23 @@ func generateToken() string {
 	return hex.EncodeToString(b)
 }
 
+func normalizeShareExpiryDays(days int) int {
+	if days <= 0 {
+		return 7
+	}
+	if days > 90 {
+		return 90
+	}
+	return days
+}
+
+func shareExpiryMessage(days int) string {
+	if days == 1 {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", days)
+}
+
 func (s *Service) GetConsolidatedReportStats() (map[string]any, error) {
 	var totalShares int64
 	var totalNDI int64
@@ -808,11 +893,14 @@ func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint)
 	return shares, err
 }
 
-func (s *Service) CreateSecureShare(reportID uint, recipientEmail string) (*SecureReportShare, error) {
+func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiryDays int) (*SecureReportShare, error) {
 	// Fetch report
 	var report ExamReport
 	if err := s.db.First(&report, reportID).Error; err != nil {
 		return nil, fmt.Errorf("report not found: %w", err)
+	}
+	if !report.IsLocked {
+		return nil, fmt.Errorf("report must be finalized and locked before it can be shared")
 	}
 
 	// Fetch exam details to build name/metadata
@@ -864,6 +952,9 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string) (*Secu
 		return nil, fmt.Errorf("failed to upload PDF to storage: %w", err)
 	}
 
+	expiryDays = normalizeShareExpiryDays(expiryDays)
+	expiresAt := time.Now().Add(time.Duration(expiryDays) * 24 * time.Hour)
+
 	// Save GORM record
 	share := SecureReportShare{
 		ExamReportID:   reportID,
@@ -874,7 +965,7 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string) (*Secu
 		Password:       passcode,
 		PdfURL:         pdfURL,
 		Status:         "sent",
-		ExpiresAt:      time.Now().Add(7 * 24 * time.Hour), // 7 days expiration
+		ExpiresAt:      expiresAt,
 	}
 
 	if err := s.db.Create(&share).Error; err != nil {
@@ -890,9 +981,10 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string) (*Secu
 
 	subjectLine := fmt.Sprintf("CONFIDENTIAL: Polygraph Report for %s", subjectName)
 	emailBody := fmt.Sprintf(
-		"Hello,\n\nYour polygraph forensic report for %s is attached to this email as a password-protected PDF.\n\nTo view the password and securely unlock this document, please click the link below:\n%s\n\nFor security reasons, this link will expire in 7 days.\n\nBest regards,\nPolygraph Forensic System Team",
+		"Hello,\n\nYour polygraph forensic report for %s is attached to this email as a password-protected PDF.\n\nTo view the password and securely unlock this document, please click the link below:\n%s\n\nFor security reasons, this link will expire in %s.\n\nBest regards,\nPolygraph Forensic System Team",
 		subjectName,
 		secureLink,
+		shareExpiryMessage(expiryDays),
 	)
 
 	// Send it!
@@ -910,7 +1002,7 @@ func (s *Service) GetSecureReportShareByToken(token string) (*SecureReportShare,
 	return &share, nil
 }
 
-func (s *Service) RegenerateSecureReportShare(id uint) (*SecureReportShare, error) {
+func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureReportShare, error) {
 	var share SecureReportShare
 	if err := s.db.Preload("Subject").Preload("ExamReport").First(&share, id).Error; err != nil {
 		return nil, err
@@ -963,13 +1055,16 @@ func (s *Service) RegenerateSecureReportShare(id uint) (*SecureReportShare, erro
 		return nil, err
 	}
 
+	expiryDays = normalizeShareExpiryDays(expiryDays)
+	expiresAt := time.Now().Add(time.Duration(expiryDays) * 24 * time.Hour)
+
 	// Update record
 	updates := map[string]any{
 		"token":      token,
 		"password":   passcode,
 		"pdf_url":    pdfURL,
 		"status":     "sent",
-		"expires_at": time.Now().Add(7 * 24 * time.Hour),
+		"expires_at": expiresAt,
 	}
 
 	if err := s.db.Model(&share).Updates(updates).Error; err != nil {
@@ -990,8 +1085,9 @@ func (s *Service) RegenerateSecureReportShare(id uint) (*SecureReportShare, erro
 
 	subjectLine := fmt.Sprintf("CONFIDENTIAL (UPDATED): Polygraph Report for %s", subjectName)
 	emailBody := fmt.Sprintf(
-		"Hello,\n\nYour polygraph forensic report link has been regenerated. The report is attached to this email as a password-protected PDF.\n\nTo view the new password and unlock the document, please click the secure link below:\n%s\n\nFor security reasons, this link will expire in 7 days.\n\nBest regards,\nPolygraph Forensic System Team",
+		"Hello,\n\nYour polygraph forensic report link has been regenerated. The report is attached to this email as a password-protected PDF.\n\nTo view the new password and unlock the document, please click the secure link below:\n%s\n\nFor security reasons, this link will expire in %s.\n\nBest regards,\nPolygraph Forensic System Team",
 		secureLink,
+		shareExpiryMessage(expiryDays),
 	)
 
 	_ = email.SendWithAttachment(share.RecipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)

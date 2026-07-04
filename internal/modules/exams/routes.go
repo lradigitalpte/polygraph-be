@@ -27,6 +27,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 	{
 		r.POST("", permissionMiddleware("exam:report"), ctrl.CreateReport)
 		r.GET("/:id", permissionMiddleware("exam:view"), ctrl.GetReport)
+		r.POST("/:id/finalize", permissionMiddleware("exam:report"), ctrl.FinalizeReport)
 		r.POST("/:id/override-unlock", permissionMiddleware("exam:report:override"), ctrl.OverrideUnlockReport)
 		r.POST("/documents", permissionMiddleware("document:manage"), ctrl.UploadDocument)
 		r.GET("/:id/documents", permissionMiddleware("exam:view"), ctrl.GetDocuments)
