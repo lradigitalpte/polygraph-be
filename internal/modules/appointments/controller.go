@@ -422,7 +422,8 @@ func (ctrl *Controller) RunDueReminders(c *gin.Context) {
 // BulkSchedule creates subjects (if new) and one appointment each in a single transaction.
 func (ctrl *Controller) BulkSchedule(c *gin.Context) {
 	var body struct {
-		ClientID    uint                `json:"client_id"    binding:"required"`
+		ClientID    *uint               `json:"client_id"`
+		ImportMode  string              `json:"import_mode"`
 		ExaminerID  uint                `json:"examiner_id"  binding:"required"`
 		ScheduledAt string              `json:"scheduled_at" binding:"required"`
 		Duration    int                 `json:"duration"`
@@ -433,6 +434,15 @@ func (ctrl *Controller) BulkSchedule(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	importMode := strings.ToLower(strings.TrimSpace(body.ImportMode))
+	if importMode == "" {
+		importMode = "corporate"
+	}
+	if importMode != "individual" && (body.ClientID == nil || *body.ClientID == 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "client_id is required for corporate scheduling"})
 		return
 	}
 
@@ -447,6 +457,7 @@ func (ctrl *Controller) BulkSchedule(c *gin.Context) {
 
 	results, err := ctrl.service.BulkSchedule(
 		body.ClientID,
+		importMode,
 		body.ExaminerID,
 		scheduledAt,
 		body.Duration,
@@ -468,7 +479,8 @@ func (ctrl *Controller) BulkSchedule(c *gin.Context) {
 // BulkImportHistorical imports historical completed exam sessions.
 func (ctrl *Controller) BulkImportHistorical(c *gin.Context) {
 	var body struct {
-		ClientID   uint                  `json:"client_id"   binding:"required"`
+		ClientID   *uint                 `json:"client_id"`
+		ImportMode string                `json:"import_mode"`
 		ExaminerID uint                  `json:"examiner_id" binding:"required"`
 		ExamFee    float64               `json:"exam_fee"`
 		Rows       []HistoricalImportRow `json:"rows"        binding:"required,min=1"`
@@ -478,8 +490,18 @@ func (ctrl *Controller) BulkImportHistorical(c *gin.Context) {
 		return
 	}
 
+	importMode := strings.ToLower(strings.TrimSpace(body.ImportMode))
+	if importMode == "" {
+		importMode = "corporate"
+	}
+	if importMode != "individual" && (body.ClientID == nil || *body.ClientID == 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "client_id is required for corporate import"})
+		return
+	}
+
 	imported, err := ctrl.service.BulkImportHistorical(
 		body.ClientID,
+		importMode,
 		body.ExaminerID,
 		body.ExamFee,
 		body.Rows,

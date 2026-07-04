@@ -273,10 +273,11 @@ type BulkScheduleResult struct {
 }
 
 // BulkSchedule creates subjects (if new) and one appointment per examinee in a
-// single transaction. All appointments share client, examiner, duration, fee and
-// payment fields; each may optionally have a per-row time offset.
+// single transaction. All appointments share examiner, duration, fee and payment
+// fields; each may optionally have a per-row time offset.
 func (s *Service) BulkSchedule(
-	clientID uint,
+	clientID *uint,
+	importMode string,
 	examinerID uint,
 	scheduledAt time.Time,
 	duration int,
@@ -285,8 +286,17 @@ func (s *Service) BulkSchedule(
 	notes string,
 	rows []BulkScheduleInput,
 ) ([]BulkScheduleResult, error) {
-	if _, err := s.GetClientByID(strconv.FormatUint(uint64(clientID), 10)); err != nil {
-		return nil, err
+	importMode = strings.ToLower(strings.TrimSpace(importMode))
+	if importMode == "" {
+		importMode = "corporate"
+	}
+	if importMode != "individual" {
+		if clientID == nil || *clientID == 0 {
+			return nil, errors.New("client_id is required for corporate scheduling")
+		}
+		if _, err := s.GetClientByID(strconv.FormatUint(uint64(*clientID), 10)); err != nil {
+			return nil, err
+		}
 	}
 	if len(rows) == 0 {
 		return nil, errors.New("at least one examinee is required")
@@ -303,6 +313,22 @@ func (s *Service) BulkSchedule(
 
 		for i, row := range rows {
 			var subj subjects.Subject
+			rowClientID := uint(0)
+
+			if importMode == "individual" {
+				first := strings.TrimSpace(row.FirstName)
+				last := strings.TrimSpace(row.LastName)
+				if first == "" && last == "" {
+					continue
+				}
+				id, err := txSvc.findOrCreateIndividualClient(tx, first, last, row.Phone, row.Email, "")
+				if err != nil {
+					return fmt.Errorf("row %d: failed to create individual client: %w", i+1, err)
+				}
+				rowClientID = id
+			} else {
+				rowClientID = *clientID
+			}
 
 			if row.SubjectID != nil && *row.SubjectID > 0 {
 				// Use existing subject.
@@ -325,7 +351,7 @@ func (s *Service) BulkSchedule(
 					last = "Record"
 				}
 				subj = subjects.Subject{
-					ClientID:    &clientID,
+					ClientID:    &rowClientID,
 					FirstName:   first,
 					LastName:    last,
 					Email:       strings.TrimSpace(row.Email),
@@ -339,7 +365,7 @@ func (s *Service) BulkSchedule(
 
 			apptTime := scheduledAt.Add(time.Duration(row.OffsetMinutes) * time.Minute)
 			appt := Appointment{
-				ClientID:      clientID,
+				ClientID:      rowClientID,
 				SubjectID:     subj.ID,
 				ExaminerID:    examinerID,
 				ScheduledAt:   apptTime,
