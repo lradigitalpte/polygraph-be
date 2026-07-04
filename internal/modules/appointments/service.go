@@ -553,6 +553,20 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 	if err := s.db.Preload("Client").First(&appointment, id).Error; err != nil {
 		return nil, err
 	}
+	if _, ok := safe["exam_fee"]; ok {
+		org := orgCurrencyCode(s.loadMoneyRates())
+		if strings.TrimSpace(appointment.FeeCurrency) == "" {
+			_ = s.db.Model(&appointment).Update("fee_currency", org).Error
+			appointment.FeeCurrency = org
+		}
+		typePrices := s.loadExamTypePriceIndex()
+		rates := s.loadMoneyRates()
+		s.normalizeAppointmentMoney(&appointment, typePrices, rates)
+		_ = s.syncQuotationFromAppointment(appointment.ID)
+		if err := s.db.Preload("Client").First(&appointment, id).Error; err != nil {
+			return nil, err
+		}
+	}
 	return &appointment, nil
 }
 
@@ -1186,15 +1200,22 @@ func (s *Service) ConvertQuotationToAppointment(quotationID string, in ConvertQu
 		ScheduledAt:     in.ScheduledAt,
 		Duration:        in.Duration,
 		ExamFee:         quote.Amount,
+		FeeCurrency:     strings.ToUpper(strings.TrimSpace(quote.Currency)),
 		CollectedAmount: quote.CollectedAmount,
 		Status:          "confirmed",
 		PaymentStatus:   quoteStatusToPaymentStatus(quote.Status, quote.CollectedAmount, quote.Amount),
 		Notes:           notes,
 	}
+	if strings.TrimSpace(appt.FeeCurrency) == "" {
+		appt.FeeCurrency = orgCurrencyCode(s.loadMoneyRates())
+	}
 	// validateAppointment runs the Sunday/availability/overlap checks and sets defaults.
 	if err := s.validateAppointment(&appt); err != nil {
 		return nil, err
 	}
+	typePrices := s.loadExamTypePriceIndex()
+	rates := s.loadMoneyRates()
+	s.normalizeAppointmentMoney(&appt, typePrices, rates)
 	// Create directly (not via CreateAppointment) so we don't auto-generate a second
 	// invoice — we link the existing quotation below instead.
 	if err := s.db.Create(&appt).Error; err != nil {
@@ -1225,13 +1246,15 @@ func (s *Service) BulkEditPrices(targets []struct {
 	AppointmentID *uint
 	QuotationID   *uint
 }, newPrice float64) error {
+	org := orgCurrencyCode(s.loadMoneyRates())
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		for _, t := range targets {
 			if t.AppointmentID != nil && *t.AppointmentID > 0 {
 				var appt Appointment
 				if err := tx.First(&appt, *t.AppointmentID).Error; err == nil {
 					updates := map[string]interface{}{
-						"exam_fee": newPrice,
+						"exam_fee":     newPrice,
+						"fee_currency": org,
 					}
 					if appt.PaymentStatus == "Paid" || appt.CollectedAmount > 0 {
 						updates["collected_amount"] = newPrice
@@ -1244,7 +1267,8 @@ func (s *Service) BulkEditPrices(targets []struct {
 				var quote Quotation
 				if err := tx.First(&quote, *t.QuotationID).Error; err == nil {
 					updates := map[string]interface{}{
-						"amount": newPrice,
+						"amount":   newPrice,
+						"currency": org,
 					}
 					if quote.Status == "Paid" || quote.CollectedAmount > 0 {
 						updates["collected_amount"] = newPrice
@@ -1257,7 +1281,8 @@ func (s *Service) BulkEditPrices(targets []struct {
 				var appt Appointment
 				if err := tx.First(&appt, t.ID).Error; err == nil {
 					updates := map[string]interface{}{
-						"exam_fee": newPrice,
+						"exam_fee":     newPrice,
+						"fee_currency": org,
 					}
 					if appt.PaymentStatus == "Paid" || appt.CollectedAmount > 0 {
 						updates["collected_amount"] = newPrice
@@ -1270,7 +1295,8 @@ func (s *Service) BulkEditPrices(targets []struct {
 				var quote Quotation
 				if err := tx.First(&quote, t.ID).Error; err == nil {
 					updates := map[string]interface{}{
-						"amount": newPrice,
+						"amount":   newPrice,
+						"currency": org,
 					}
 					if quote.Status == "Paid" || quote.CollectedAmount > 0 {
 						updates["collected_amount"] = newPrice

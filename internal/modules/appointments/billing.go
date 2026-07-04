@@ -121,24 +121,44 @@ func (s *Service) normalizeCollectedForTarget(appt Appointment, targetFee float6
 }
 
 // canonicalAppointmentAmounts returns org-currency fee and collected amounts.
-// Exam type catalog (USD) is the source of truth when the appointment notes identify a type.
 func (s *Service) canonicalAppointmentAmounts(appt Appointment, typePrices map[string]float64, rates money.Rates) (float64, float64) {
 	org := orgCurrencyCode(rates)
+	target, hasCatalog := catalogOrgFee(appt, typePrices, rates)
+	feeCur := strings.ToUpper(strings.TrimSpace(appt.FeeCurrency))
 
-	if target, ok := catalogOrgFee(appt, typePrices, rates); ok {
+	// Repair legacy rows corrupted by repeated currency conversion.
+	if hasCatalog && target > 0 && appt.ExamFee > target*1.05 {
 		collected := s.normalizeCollectedForTarget(appt, target, rates)
+		if strings.EqualFold(strings.TrimSpace(appt.PaymentStatus), "Paid") {
+			collected = target
+		}
 		return target, collected
 	}
 
-	fee := appt.ExamFee
-	cur := strings.ToUpper(strings.TrimSpace(appt.FeeCurrency))
-	if cur == org || (cur == "" && org == "USD") {
-		fee = money.Round2(fee)
-	} else {
-		fee = amountInOrgCurrency(fee, "USD", rates)
+	// Amounts already stored in org billing currency — use as-is.
+	if feeCur == org && appt.ExamFee > 0 {
+		fee := money.Round2(appt.ExamFee)
+		return fee, s.normalizeCollectedForTarget(appt, fee, rates)
 	}
-	collected := s.normalizeCollectedForTarget(appt, fee, rates)
-	return fee, collected
+
+	// New booking / catalog USD input — convert once.
+	if feeCur == "USD" || feeCur == "" {
+		if hasCatalog && target > 0 {
+			catalogUSD, _ := catalogUSDForAppointment(appt, typePrices)
+			if appt.ExamFee <= 0 || money.ApproxEqual(appt.ExamFee, catalogUSD) {
+				return target, s.normalizeCollectedForTarget(appt, target, rates)
+			}
+		}
+		if appt.ExamFee > 0 {
+			orgFee := amountInOrgCurrency(appt.ExamFee, "USD", rates)
+			return orgFee, s.normalizeCollectedForTarget(appt, orgFee, rates)
+		}
+	}
+
+	if hasCatalog && target > 0 {
+		return target, s.normalizeCollectedForTarget(appt, target, rates)
+	}
+	return money.Round2(appt.ExamFee), s.normalizeCollectedForTarget(appt, appt.ExamFee, rates)
 }
 
 func (s *Service) normalizeAppointmentMoney(appt *Appointment, typePrices map[string]float64, rates money.Rates) {
