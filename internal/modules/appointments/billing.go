@@ -327,6 +327,51 @@ func (s *Service) syncAppointmentFromQuotation(quotationID uint) error {
 	return s.db.Model(&Appointment{}).Where("id = ?", *quote.AppointmentID).Updates(updates).Error
 }
 
+func examinerNameFromQuoteTitle(title string) string {
+	parts := strings.SplitN(strings.TrimSpace(title), " — ", 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	parts = strings.SplitN(strings.TrimSpace(title), " - ", 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+type examinerNameRow struct {
+	ID   uint   `gorm:"column:id"`
+	Name string `gorm:"column:name"`
+}
+
+func (s *Service) loadExaminerNameIndex(ids []uint) map[uint]string {
+	if len(ids) == 0 {
+		return map[uint]string{}
+	}
+	unique := make([]uint, 0, len(ids))
+	seen := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return map[uint]string{}
+	}
+	var rows []examinerNameRow
+	_ = s.db.Table("users").Select("id", "name").Where("id IN ?", unique).Find(&rows).Error
+	index := make(map[uint]string, len(rows))
+	for _, row := range rows {
+		index[row.ID] = strings.TrimSpace(row.Name)
+	}
+	return index
+}
+
 func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, AccountSummary, error) {
 	trimmedClientID := strings.TrimSpace(clientID)
 	rates := s.loadMoneyRates()
@@ -345,6 +390,14 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 	for i := range appointments {
 		s.backfillAppointmentBilling(&appointments[i], typePrices)
 	}
+
+	examinerIDs := make([]uint, 0, len(appointments))
+	for _, appt := range appointments {
+		if appt.ExaminerID > 0 {
+			examinerIDs = append(examinerIDs, appt.ExaminerID)
+		}
+	}
+	examinerNames := s.loadExaminerNameIndex(examinerIDs)
 
 	var quotations []Quotation
 	quoteQuery := s.db.Preload("Client").Order("created_at DESC")
@@ -383,6 +436,11 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			}
 			appt = loaded
 			apptByID[appt.ID] = appt
+			if appt.ExaminerID > 0 {
+				if name := examinerNames[appt.ExaminerID]; name == "" {
+					examinerNames = s.loadExaminerNameIndex(append(examinerIDs, appt.ExaminerID))
+				}
+			}
 		}
 
 		seenAppointments[appt.ID] = true
@@ -429,6 +487,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			Status:        appt.PaymentStatus,
 			PaymentMode:   appt.PaymentMode,
 			Currency:      defaultCurrency,
+			ExaminerName:  examinerNames[appt.ExaminerID],
 		})
 	}
 
@@ -467,6 +526,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			Status:        appt.PaymentStatus,
 			PaymentMode:   appt.PaymentMode,
 			Currency:      defaultCurrency,
+			ExaminerName:  examinerNames[appt.ExaminerID],
 		})
 	}
 
@@ -493,21 +553,22 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 
 		qid := quote.ID
 		addEntry(AccountLedgerEntry{
-			ID:          quote.ID,
-			Source:      "quote",
-			Code:        code,
-			ReferenceID: quote.ID,
-			QuotationID: &qid,
-			ClientID:    quote.ClientID,
-			ClientName:  quote.Client.Name,
-			ClientEmail: quote.Client.Email,
-			Title:       quote.Title,
-			Date:        quote.CreatedAt,
-			TotalAmount: total,
-			PaidAmount:  paid,
-			BalanceDue:  balance,
-			Status:      quote.Status,
-			Currency:    defaultCurrency,
+			ID:           quote.ID,
+			Source:       "quote",
+			Code:         code,
+			ReferenceID:  quote.ID,
+			QuotationID:  &qid,
+			ClientID:     quote.ClientID,
+			ClientName:   quote.Client.Name,
+			ClientEmail:  quote.Client.Email,
+			Title:        quote.Title,
+			Date:         quote.CreatedAt,
+			TotalAmount:  total,
+			PaidAmount:   paid,
+			BalanceDue:   balance,
+			Status:       quote.Status,
+			Currency:     defaultCurrency,
+			ExaminerName: examinerNameFromQuoteTitle(quote.Title),
 		})
 	}
 

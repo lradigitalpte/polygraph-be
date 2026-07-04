@@ -28,4 +28,5 @@ type AccountLedgerEntry struct {
 	Status        string    `json:"status"`
 	PaymentMode   string    `json:"payment_mode,omitempty"`
 	Currency      string    `json:"currency,omitempty"`
+	ExaminerName  string    `json:"examiner_name,omitempty"`
 }

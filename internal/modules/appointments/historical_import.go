@@ -40,6 +40,27 @@ func truncate(s string, limit int) string {
 	return s
 }
 
+type examTypeCatalogRow struct {
+	Name     string
+	Price    float64
+	Duration int
+}
+
+func (s *Service) loadExamTypeCatalog(id uint) (examTypeCatalogRow, bool) {
+	if id == 0 {
+		return examTypeCatalogRow{}, false
+	}
+	var row examTypeCatalogRow
+	err := s.db.Table("exam_types").
+		Select("name", "price", "duration").
+		Where("id = ?", id).
+		First(&row).Error
+	if err != nil {
+		return examTypeCatalogRow{}, false
+	}
+	return row, true
+}
+
 func (s *Service) BulkImportHistorical(
 	clientID *uint,
 	importMode string,
@@ -136,8 +157,16 @@ func (s *Service) BulkImportHistorical(
 			}
 
 			rowPrice := examFee
-			if row.Price != nil {
-				rowPrice = *row.Price
+			duration := 150
+			examTypeName := "Forensic Polygraph Screening"
+			if row.ExamTypeID != nil && *row.ExamTypeID > 0 {
+				if et, ok := txSvc.loadExamTypeCatalog(*row.ExamTypeID); ok {
+					examTypeName = et.Name
+					rowPrice = et.Price
+					if et.Duration > 0 {
+						duration = et.Duration
+					}
+				}
 			}
 
 			apptStatus, paymentStatus, _, _ := resolveHistoricalAppointmentStatus(row.Status)
@@ -146,16 +175,6 @@ func (s *Service) BulkImportHistorical(
 				collectedAmount = 0
 				if apptStatus == "pending" {
 					paymentStatus = "Unpaid"
-				}
-			}
-
-			examTypeName := "Forensic Polygraph Screening"
-			if row.ExamTypeID != nil && *row.ExamTypeID > 0 {
-				var et struct {
-					Name string `gorm:"column:name"`
-				}
-				if err := tx.Table("exam_types").Select("name").Where("id = ?", *row.ExamTypeID).First(&et).Error; err == nil && et.Name != "" {
-					examTypeName = et.Name
 				}
 			}
 
@@ -201,7 +220,7 @@ func (s *Service) BulkImportHistorical(
 				SubjectID:       subj.ID,
 				ExaminerID:      examinerID,
 				ScheduledAt:     scheduledTime,
-				Duration:        150,
+				Duration:        duration,
 				ExamFee:         rowPrice,
 				PaymentMode:     "Bank Transfer",
 				PaymentStatus:   paymentStatus,
