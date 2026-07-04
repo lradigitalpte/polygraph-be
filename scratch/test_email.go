@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Email connectivity test script.
 // Usage:
 //

@@ -40,6 +40,7 @@ type Appointment struct {
 	ScheduledAt       time.Time      `json:"scheduled_at"`
 	Duration          int            `json:"duration"` // In minutes
 	ExamFee           float64        `gorm:"type:numeric(10,2);default:0" json:"exam_fee"`
+	FeeCurrency       string         `gorm:"size:10;default:'USD'" json:"fee_currency"` // USD catalog input; normalized rows use org currency
 	CollectedAmount   float64        `gorm:"type:numeric(10,2);default:0" json:"collected_amount"`
 	Status            string         `gorm:"size:50;default:'pending'" json:"status"`        // pending, confirmed, cancelled, completed
 	PaymentStatus     string         `gorm:"size:50;default:'Unpaid'" json:"payment_status"` // Paid, Partial, Unpaid

@@ -1,6 +1,7 @@
 package appointments
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,81 @@ func (s *Service) loadMoneyRates() money.Rates {
 	return money.LoadRates(s.db)
 }
 
+func orgCurrencyCode(rates money.Rates) string {
+	code := strings.ToUpper(strings.TrimSpace(rates.Currency))
+	if code == "" {
+		return "USD"
+	}
+	return code
+}
+
+func catalogUSDForAppointment(appt Appointment, typePrices map[string]float64) (float64, bool) {
+	title := strings.ToLower(appointmentTitleFromNotes(appt.Notes))
+	price, ok := typePrices[title]
+	return price, ok
+}
+
+// inferLegacyFeeCurrency guesses whether exam_fee is still in USD for rows created before fee_currency existed.
+func inferLegacyFeeCurrency(appt Appointment, catalogUSD float64, rates money.Rates) string {
+	org := orgCurrencyCode(rates)
+	if org == "USD" {
+		return "USD"
+	}
+	if appt.ExamFee <= 0 {
+		return org
+	}
+	if catalogUSD > 0 && money.ApproxEqual(appt.ExamFee, catalogUSD) {
+		return "USD"
+	}
+	if catalogUSD > 0 {
+		expectedOrg := money.Round2(money.FromUSD(catalogUSD, rates))
+		if money.ApproxEqual(appt.ExamFee, expectedOrg) {
+			return org
+		}
+	}
+	// Fee left in USD while collected was converted to org currency (common after historical import).
+	if appt.CollectedAmount > appt.ExamFee*1.5 {
+		convertedFee := money.FromUSD(appt.ExamFee, rates)
+		if money.ApproxEqual(appt.CollectedAmount, convertedFee) || math.Abs(appt.CollectedAmount-convertedFee) < 1 {
+			return "USD"
+		}
+	}
+	// Both amounts still at legacy USD scale.
+	if appt.CollectedAmount > 0 &&
+		money.ApproxEqual(appt.CollectedAmount, appt.ExamFee) &&
+		catalogUSD > 0 &&
+		appt.ExamFee <= catalogUSD*1.25 {
+		return "USD"
+	}
+	if catalogUSD > 0 {
+		expectedOrg := money.Round2(money.FromUSD(catalogUSD, rates))
+		if appt.ExamFee >= expectedOrg*0.98 {
+			return org
+		}
+	}
+	return "USD"
+}
+
+func appointmentFeeCurrency(appt Appointment, typePrices map[string]float64, rates money.Rates) string {
+	if cur := strings.ToUpper(strings.TrimSpace(appt.FeeCurrency)); cur != "" {
+		return cur
+	}
+	catalogUSD, _ := catalogUSDForAppointment(appt, typePrices)
+	return inferLegacyFeeCurrency(appt, catalogUSD, rates)
+}
+
+func amountInOrgCurrency(amount float64, currency string, rates money.Rates) float64 {
+	org := orgCurrencyCode(rates)
+	cur := strings.ToUpper(strings.TrimSpace(currency))
+	if cur == "" {
+		cur = "USD"
+	}
+	if org == cur {
+		return money.Round2(amount)
+	}
+	return money.Round2(money.Convert(amount, cur, org, rates))
+}
+
 // resolveUSDFeeForAppointment returns the catalog fee in USD (exam_types.price is USD).
 func resolveUSDFeeForAppointment(appt Appointment, typePrices map[string]float64) float64 {
 	if appt.ExamFee > 0 {
@@ -41,80 +117,81 @@ func resolveUSDFeeForAppointment(appt Appointment, typePrices map[string]float64
 	return 0
 }
 
-// resolveFeeInOrgCurrency converts catalog USD fees into the organization's billing currency.
-// Legacy rows may still store raw USD in exam_fee; those are converted on read/backfill.
+// resolveFeeInOrgCurrency returns the appointment fee in the organization's billing currency.
 func (s *Service) resolveFeeInOrgCurrency(appt Appointment, typePrices map[string]float64, rates money.Rates) float64 {
-	title := strings.ToLower(appointmentTitleFromNotes(appt.Notes))
-	catalogUSD, hasCatalog := typePrices[title]
-
-	usdFee := 0.0
-	if appt.ExamFee > 0 {
-		usdFee = appt.ExamFee
-	} else if hasCatalog {
-		usdFee = catalogUSD
-	}
-	if usdFee <= 0 {
-		return 0
-	}
-
-	orgCurrency := strings.ToUpper(strings.TrimSpace(rates.Currency))
-	if orgCurrency == "" || orgCurrency == "USD" {
-		return money.Round2(usdFee)
-	}
-
-	if hasCatalog && money.ApproxEqual(usdFee, catalogUSD) {
+	if appt.ExamFee <= 0 {
+		catalogUSD, ok := catalogUSDForAppointment(appt, typePrices)
+		if !ok || catalogUSD <= 0 {
+			return 0
+		}
 		return money.Round2(money.FromUSD(catalogUSD, rates))
 	}
-
-	expectedOrg := 0.0
-	if hasCatalog {
-		expectedOrg = money.Round2(money.FromUSD(catalogUSD, rates))
-	}
-	if expectedOrg > 0 && money.ApproxEqual(usdFee, expectedOrg) {
-		return expectedOrg
-	}
-
-	return money.Round2(money.FromUSD(usdFee, rates))
+	feeCurrency := appointmentFeeCurrency(appt, typePrices, rates)
+	return amountInOrgCurrency(appt.ExamFee, feeCurrency, rates)
 }
 
-func (s *Service) normalizeCollectedInOrgCurrency(appt Appointment, orgFee float64, rates money.Rates) float64 {
+func (s *Service) normalizeCollectedInOrgCurrency(appt Appointment, orgFee float64, feeCurrency string, rates money.Rates) float64 {
 	if appt.CollectedAmount <= 0 {
 		return 0
 	}
-	orgCurrency := strings.ToUpper(strings.TrimSpace(rates.Currency))
-	if orgCurrency == "" || orgCurrency == "USD" {
-		return money.Round2(appt.CollectedAmount)
+	org := orgCurrencyCode(rates)
+	cur := strings.ToUpper(strings.TrimSpace(feeCurrency))
+	if cur == "" {
+		cur = "USD"
 	}
-	if appt.ExamFee > 0 && !money.ApproxEqual(appt.ExamFee, orgFee) {
+
+	// Collected was recorded in the same currency as the stored fee.
+	if cur != org {
+		if org != "USD" && appt.ExamFee > 0 {
+			convertedFee := money.FromUSD(appt.ExamFee, rates)
+			if money.ApproxEqual(appt.CollectedAmount, convertedFee) || math.Abs(appt.CollectedAmount-convertedFee) < 1 {
+				return money.Round2(appt.CollectedAmount)
+			}
+		}
+		return amountInOrgCurrency(appt.CollectedAmount, cur, rates)
+	}
+
+	// Legacy rows may still hold collected in USD while fee is already org currency.
+	if org != "USD" && appt.ExamFee > 0 && !money.ApproxEqual(appt.ExamFee, orgFee) {
 		return money.Round2(orgFee * (appt.CollectedAmount / appt.ExamFee))
 	}
-	return money.Round2(money.FromUSD(appt.CollectedAmount, rates))
+	if org != "USD" && appt.ExamFee <= 0 {
+		return amountInOrgCurrency(appt.CollectedAmount, "USD", rates)
+	}
+	return money.Round2(appt.CollectedAmount)
 }
 
 func (s *Service) normalizeAppointmentMoney(appt *Appointment, typePrices map[string]float64, rates money.Rates) {
 	if appt == nil {
 		return
 	}
-	orgFee := s.resolveFeeInOrgCurrency(*appt, typePrices, rates)
-	if orgFee <= 0 {
-		return
-	}
-	orgCollected := s.normalizeCollectedInOrgCurrency(*appt, orgFee, rates)
+	org := orgCurrencyCode(rates)
+	feeCurrency := appointmentFeeCurrency(*appt, typePrices, rates)
+	orgFee := amountInOrgCurrency(appt.ExamFee, feeCurrency, rates)
+	orgCollected := s.normalizeCollectedInOrgCurrency(*appt, orgFee, feeCurrency, rates)
 
-	if money.ApproxEqual(appt.ExamFee, orgFee) && money.ApproxEqual(appt.CollectedAmount, orgCollected) {
-		appt.ExamFee = orgFee
-		appt.CollectedAmount = orgCollected
+	if orgCollected > 0 && strings.EqualFold(strings.TrimSpace(appt.PaymentStatus), "Paid") {
+		if math.Abs(orgFee-orgCollected) < 1 || orgCollected > orgFee {
+			orgFee = orgCollected
+		}
+	}
+
+	if money.ApproxEqual(appt.ExamFee, orgFee) &&
+		money.ApproxEqual(appt.CollectedAmount, orgCollected) &&
+		strings.EqualFold(strings.TrimSpace(appt.FeeCurrency), org) {
 		return
 	}
 
 	updates := map[string]interface{}{
-		"exam_fee": orgFee,
+		"exam_fee":     orgFee,
+		"fee_currency": org,
 	}
 	if !money.ApproxEqual(appt.CollectedAmount, orgCollected) {
 		updates["collected_amount"] = orgCollected
 	}
-	_ = s.db.Model(appt).Updates(updates).Error
+	_ = s.db.Model(&Appointment{}).Where("id = ?", appt.ID).Updates(updates).Error
 	appt.ExamFee = orgFee
+	appt.FeeCurrency = org
 	appt.CollectedAmount = orgCollected
 }
 
@@ -195,11 +272,7 @@ func (s *Service) ensureInvoiceForAppointment(appt *Appointment) error {
 		return nil
 	}
 
-	rates := s.loadMoneyRates()
-	billingCurrency := strings.ToUpper(strings.TrimSpace(rates.Currency))
-	if billingCurrency == "" {
-		billingCurrency = "USD"
-	}
+	billingCurrency := orgCurrencyCode(s.loadMoneyRates())
 
 	appointmentID := appt.ID
 	quote := &Quotation{
@@ -227,10 +300,7 @@ func (s *Service) syncQuotationFromAppointment(appointmentID uint) error {
 	rates := s.loadMoneyRates()
 	s.normalizeAppointmentMoney(&appt, typePrices, rates)
 
-	billingCurrency := strings.ToUpper(strings.TrimSpace(rates.Currency))
-	if billingCurrency == "" {
-		billingCurrency = "USD"
-	}
+	billingCurrency := orgCurrencyCode(rates)
 
 	updates := map[string]interface{}{
 		"amount":           appt.ExamFee,
@@ -253,6 +323,7 @@ func (s *Service) syncAppointmentFromQuotation(quotationID uint) error {
 	updates := map[string]interface{}{
 		"exam_fee":         quote.Amount,
 		"collected_amount": quote.CollectedAmount,
+		"fee_currency":     strings.ToUpper(strings.TrimSpace(quote.Currency)),
 		"payment_status":   quoteStatusToPaymentStatus(quote.Status, quote.CollectedAmount, quote.Amount),
 	}
 	return s.db.Model(&Appointment{}).Where("id = ?", *quote.AppointmentID).Updates(updates).Error
@@ -261,10 +332,7 @@ func (s *Service) syncAppointmentFromQuotation(quotationID uint) error {
 func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, AccountSummary, error) {
 	trimmedClientID := strings.TrimSpace(clientID)
 	rates := s.loadMoneyRates()
-	defaultCurrency := strings.ToUpper(strings.TrimSpace(rates.Currency))
-	if defaultCurrency == "" {
-		defaultCurrency = "USD"
-	}
+	defaultCurrency := orgCurrencyCode(rates)
 
 	var appointments []Appointment
 	apptQuery := s.db.Preload("Client").Order("scheduled_at DESC")
@@ -322,13 +390,16 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 		seenAppointments[appt.ID] = true
 		seenQuotations[quote.ID] = true
 
-		totalDue := s.resolveFeeInOrgCurrency(appt, typePrices, rates)
+		totalDue := appt.ExamFee
 		if totalDue <= 0 {
-			totalDue = quote.Amount
+			totalDue = s.resolveFeeInOrgCurrency(appt, typePrices, rates)
+		}
+		if totalDue <= 0 {
+			totalDue = amountInOrgCurrency(quote.Amount, quote.Currency, rates)
 		}
 		paid := appt.CollectedAmount
 		if paid <= 0 {
-			paid = quote.CollectedAmount
+			paid = amountInOrgCurrency(quote.CollectedAmount, quote.Currency, rates)
 		}
 		balance := totalDue - paid
 		if balance < 0 {
@@ -352,10 +423,6 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 
 		qid := quote.ID
 		aid := appt.ID
-		entryCurrency := strings.ToUpper(strings.TrimSpace(quote.Currency))
-		if entryCurrency == "" {
-			entryCurrency = defaultCurrency
-		}
 		addEntry(AccountLedgerEntry{
 			ID:            quote.ID,
 			Source:        "booking",
@@ -373,7 +440,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			BalanceDue:    balance,
 			Status:        appt.PaymentStatus,
 			PaymentMode:   appt.PaymentMode,
-			Currency:      entryCurrency,
+			Currency:      defaultCurrency,
 		})
 	}
 
@@ -385,7 +452,10 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			continue
 		}
 
-		totalDue := s.resolveFeeInOrgCurrency(appt, typePrices, rates)
+		totalDue := appt.ExamFee
+		if totalDue <= 0 {
+			totalDue = s.resolveFeeInOrgCurrency(appt, typePrices, rates)
+		}
 		if totalDue <= 0 && appt.CollectedAmount <= 0 && strings.TrimSpace(appt.Notes) == "" {
 			continue
 		}
@@ -420,17 +490,8 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			continue
 		}
 
-		total := quote.Amount
-		paid := quote.CollectedAmount
-		entryCurrency := strings.ToUpper(strings.TrimSpace(quote.Currency))
-		if entryCurrency == "" {
-			entryCurrency = defaultCurrency
-		}
-		if entryCurrency == "USD" && defaultCurrency != "USD" {
-			total = money.Round2(money.Convert(total, "USD", defaultCurrency, rates))
-			paid = money.Round2(money.Convert(paid, "USD", defaultCurrency, rates))
-			entryCurrency = defaultCurrency
-		}
+		total := amountInOrgCurrency(quote.Amount, quote.Currency, rates)
+		paid := amountInOrgCurrency(quote.CollectedAmount, quote.Currency, rates)
 
 		balance := total - paid
 		if balance < 0 {
@@ -457,7 +518,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			PaidAmount:  paid,
 			BalanceDue:  balance,
 			Status:      quote.Status,
-			Currency:    entryCurrency,
+			Currency:    defaultCurrency,
 		})
 	}
 
@@ -475,6 +536,9 @@ func (s *Service) NormalizeNewAppointmentMoney(app *Appointment) {
 		return
 	}
 	rates := s.loadMoneyRates()
+	if strings.TrimSpace(app.FeeCurrency) == "" {
+		app.FeeCurrency = "USD"
+	}
 	typePrices := s.loadExamTypePriceIndex()
 	s.normalizeAppointmentMoney(app, typePrices, rates)
 }

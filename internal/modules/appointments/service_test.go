@@ -2,6 +2,7 @@ package appointments
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -219,4 +220,65 @@ func TestService_CreateAppointmentConvertsUSDFeeToAED(t *testing.T) {
 	require.NoError(t, db.Where("appointment_id = ?", app.ID).First(&quote).Error)
 	assert.Equal(t, "AED", quote.Currency)
 	assert.Equal(t, 1652.63, quote.Amount)
+}
+
+func TestService_BackfillRepairsSplitUSDFeeAndAEDCollected(t *testing.T) {
+	db := setupTestDB(t)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS organization_settings (
+			id INTEGER PRIMARY KEY,
+			currency TEXT,
+			usd_aed_rate REAL,
+			usd_gbp_rate REAL,
+			usd_eur_rate REAL
+		)
+	`).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO organization_settings (id, currency, usd_aed_rate, usd_gbp_rate, usd_eur_rate)
+		VALUES (1, 'AED', 3.6725, 0.7850, 0.9250)
+	`).Error)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS exam_types (
+			id INTEGER PRIMARY KEY,
+			name TEXT,
+			price REAL,
+			active INTEGER
+		)
+	`).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO exam_types (id, name, price, active) VALUES (1, 'Civil Litigation Support', 550, 1)
+	`).Error)
+
+	s := &Service{db: db}
+	client := &Client{Name: "EVA", Email: "eva@test.com"}
+	require.NoError(t, s.CreateClient(client))
+	examiner := seedBookableExaminer(t, db)
+	subject := seedSubject(t, db)
+
+	// Simulates historical import bug: fee left in USD while collected converted to AED.
+	appt := Appointment{
+		ClientID:        client.ID,
+		SubjectID:       subject.ID,
+		ExaminerID:      examiner.ID,
+		ScheduledAt:     bookableTime(),
+		Duration:        150,
+		ExamFee:         2020,
+		CollectedAmount: 7418.01,
+		Status:          "completed",
+		PaymentStatus:   "Paid",
+		Notes:           "Civil Litigation Support\nLegacy import",
+	}
+	require.NoError(t, db.Create(&appt).Error)
+
+	_, summary, err := s.buildBillingLedger(strconv.Itoa(int(client.ID)))
+	require.NoError(t, err)
+	assert.InDelta(t, 7418.01, summary.TotalBilled, 0.02)
+	assert.InDelta(t, 7418.01, summary.TotalPaid, 0.02)
+	assert.InDelta(t, 0, summary.BalanceDue, 0.02)
+
+	var repaired Appointment
+	require.NoError(t, db.First(&repaired, appt.ID).Error)
+	assert.Equal(t, "AED", repaired.FeeCurrency)
+	assert.InDelta(t, 7418.01, repaired.ExamFee, 0.02)
+	assert.InDelta(t, 7418.01, repaired.CollectedAmount, 0.02)
 }
