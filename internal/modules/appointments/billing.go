@@ -138,7 +138,10 @@ func appointmentTitleFromNotes(notes string) string {
 	if idx := strings.Index(title, "\n"); idx > 0 {
 		title = strings.TrimSpace(title[:idx])
 	}
-	return title
+	if idx := strings.Index(title, " | "); idx > 0 {
+		title = strings.TrimSpace(title[:idx])
+	}
+	return truncate(title, 255)
 }
 
 func paymentStatusToQuoteStatus(paymentStatus string, collected, total float64) string {

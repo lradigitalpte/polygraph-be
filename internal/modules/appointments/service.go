@@ -1051,6 +1051,7 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 	if input.Title == "" {
 		return errors.New("title is required")
 	}
+	input.Title = truncate(input.Title, 255)
 	if input.Amount < 0 {
 		return errors.New("amount cannot be negative")
 	}

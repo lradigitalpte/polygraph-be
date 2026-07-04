@@ -109,7 +109,7 @@ func (s *Service) BulkImportHistorical(
 					updates["spoken_language"] = truncate(row.SpokenLanguage, 100)
 				}
 				if subj.Email == "" && row.Email != "" {
-					updates["email"] = truncate(row.Email, 255)
+					updates["email"] = sanitizeImportEmail(row.Email)
 				}
 				if len(updates) > 0 {
 					tx.Model(&subj).Updates(updates)
@@ -123,7 +123,7 @@ func (s *Service) BulkImportHistorical(
 					EmployeeRef:    truncate(row.EmployeeRef, 100),
 					Gender:         truncate(row.Gender, 20),
 					SpokenLanguage: truncate(row.SpokenLanguage, 100),
-					Email:          truncate(row.Email, 255),
+					Email:          sanitizeImportEmail(row.Email),
 				}
 				if err := tx.Create(&subj).Error; err != nil {
 					return fmt.Errorf("row %d: failed to create subject: %w", i+1, err)
@@ -164,9 +164,7 @@ func (s *Service) BulkImportHistorical(
 				ref = strings.TrimSpace(row.SerialNo)
 			}
 
-			noteParts := []string{
-				fmt.Sprintf("Imported historical record (%s)", examTypeName),
-			}
+			noteParts := []string{}
 			if ref != "" {
 				noteParts = append(noteParts, fmt.Sprintf("Ref: %s", ref))
 			}
@@ -196,7 +194,7 @@ func (s *Service) BulkImportHistorical(
 				noteParts = append(noteParts, fmt.Sprintf("Gender: %s", row.Gender))
 			}
 			noteParts = append(noteParts, "Formal report pending in Polygraph — examiner must write, finalize, and send from Reports.")
-			apptNotes := strings.Join(noteParts, " | ")
+			apptNotes := examTypeName + "\n" + strings.Join(noteParts, " | ")
 
 			appt := Appointment{
 				ClientID:        rowClientID,

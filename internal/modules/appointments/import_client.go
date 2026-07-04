@@ -8,6 +8,14 @@ import (
 	"gorm.io/gorm"
 )
 
+func sanitizeImportEmail(email string) string {
+	email = strings.TrimSpace(email)
+	if email == "" || !strings.Contains(email, "@") {
+		return ""
+	}
+	return truncate(email, 255)
+}
+
 func (s *Service) findOrCreateIndividualClient(tx *gorm.DB, first, last, phone, email, gender string) (uint, error) {
 	first = truncate(first, 100)
 	last = truncate(last, 100)
@@ -30,7 +38,7 @@ func (s *Service) findOrCreateIndividualClient(tx *gorm.DB, first, last, phone, 
 			updates["gender"] = truncate(gender, 20)
 		}
 		if client.Email == "" && email != "" {
-			updates["email"] = truncate(email, 255)
+			updates["email"] = sanitizeImportEmail(email)
 		}
 		if len(updates) > 0 {
 			_ = tx.Model(&client).Updates(updates).Error
@@ -38,7 +46,7 @@ func (s *Service) findOrCreateIndividualClient(tx *gorm.DB, first, last, phone, 
 		return client.ID, nil
 	}
 
-	cleanEmail := truncate(email, 255)
+	cleanEmail := sanitizeImportEmail(email)
 	if cleanEmail == "" {
 		cleanEmail = fmt.Sprintf("import+%d@import.local", time.Now().UnixNano())
 	}
