@@ -255,15 +255,16 @@ func TestService_BackfillRepairsSplitUSDFeeAndAEDCollected(t *testing.T) {
 	examiner := seedBookableExaminer(t, db)
 	subject := seedSubject(t, db)
 
-	// Simulates historical import bug: fee left in USD while collected converted to AED.
+	// Simulates corrupted production row after repeated currency conversion.
 	appt := Appointment{
 		ClientID:        client.ID,
 		SubjectID:       subject.ID,
 		ExaminerID:      examiner.ID,
 		ScheduledAt:     bookableTime(),
 		Duration:        150,
-		ExamFee:         2020,
-		CollectedAmount: 7418.01,
+		ExamFee:         100048.60,
+		FeeCurrency:     "USD",
+		CollectedAmount: 100048.60,
 		Status:          "completed",
 		PaymentStatus:   "Paid",
 		Notes:           "Civil Litigation Support\nLegacy import",
@@ -272,13 +273,14 @@ func TestService_BackfillRepairsSplitUSDFeeAndAEDCollected(t *testing.T) {
 
 	_, summary, err := s.buildBillingLedger(strconv.Itoa(int(client.ID)))
 	require.NoError(t, err)
-	assert.InDelta(t, 7418.01, summary.TotalBilled, 0.02)
-	assert.InDelta(t, 7418.01, summary.TotalPaid, 0.02)
+	// $550 USD = ~AED 2,020 at 3.6725
+	assert.InDelta(t, 2020.0, summary.TotalBilled, 1.0)
+	assert.InDelta(t, 2020.0, summary.TotalPaid, 1.0)
 	assert.InDelta(t, 0, summary.BalanceDue, 0.02)
 
 	var repaired Appointment
 	require.NoError(t, db.First(&repaired, appt.ID).Error)
 	assert.Equal(t, "AED", repaired.FeeCurrency)
-	assert.InDelta(t, 7418.01, repaired.ExamFee, 0.02)
-	assert.InDelta(t, 7418.01, repaired.CollectedAmount, 0.02)
+	assert.InDelta(t, 2020.0, repaired.ExamFee, 1.0)
+	assert.InDelta(t, 2020.0, repaired.CollectedAmount, 1.0)
 }
