@@ -9,6 +9,7 @@ import (
 
 	"my-app/internal/database"
 	"my-app/internal/modules/auth"
+	"my-app/internal/timeutil"
 )
 
 type Service struct {
@@ -25,12 +26,10 @@ func (s *Service) ListBlocks(examinerID uint, date string) ([]Block, error) {
 		query = query.Where("examiner_id = ?", examinerID)
 	}
 	if date != "" {
-		parsedDate, err := time.Parse("2006-01-02", date)
+		start, end, err := timeutil.ClinicDayBounds(date)
 		if err != nil {
 			return nil, errors.New("date must use YYYY-MM-DD")
 		}
-		start := parsedDate.UTC().Truncate(24 * time.Hour)
-		end := start.Add(24 * time.Hour)
 		query = query.Where("date >= ? AND date < ?", start, end)
 	}
 
@@ -59,7 +58,8 @@ func (s *Service) CreateBlock(block *Block) error {
 // ensureNoAppointmentConflict rejects a block that would cover an exam the examiner
 // already has booked — you can't block time you're already committed to.
 func (s *Service) ensureNoAppointmentConflict(block *Block) error {
-	dayStart := block.Date.UTC().Truncate(24 * time.Hour)
+	dayStart := block.Date.In(timeutil.ClinicLocation())
+	dayStart = time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), 0, 0, 0, 0, timeutil.ClinicLocation())
 	dayEnd := dayStart.Add(24 * time.Hour)
 
 	type apptRow struct {
@@ -85,12 +85,9 @@ func (s *Service) ensureNoAppointmentConflict(block *Block) error {
 	blockStart := clockMinutes(block.StartTime)
 	blockEnd := clockMinutes(block.EndTime)
 	for _, r := range rows {
-		if r.Duration <= 0 {
-			r.Duration = 150
-		}
-		start := r.ScheduledAt.UTC()
-		apptStart := start.Hour()*60 + start.Minute()
-		apptEnd := apptStart + r.Duration
+		duration := timeutil.BusyDurationMinutes(r.Duration)
+		apptStart := timeutil.ClockMinutes(r.ScheduledAt)
+		apptEnd := apptStart + duration
 		if apptStart < blockEnd && apptEnd > blockStart {
 			return errors.New("this time range overlaps an exam you have booked — choose a different time")
 		}

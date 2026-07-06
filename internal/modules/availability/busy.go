@@ -2,17 +2,20 @@ package availability
 
 import (
 	"errors"
-	"fmt"
 	"time"
+
+	"my-app/internal/timeutil"
 )
 
 // BusyPeriod is a time range when the examiner cannot be booked (manual block or existing appointment).
 type BusyPeriod struct {
-	StartTime  string `json:"start_time"`
-	EndTime    string `json:"end_time"`
-	Source     string `json:"source"` // block, appointment
-	Reason     string `json:"reason,omitempty"`
-	IsFullDay  bool   `json:"is_full_day,omitempty"`
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+	StartAt   string `json:"start_at,omitempty"`
+	EndAt     string `json:"end_at,omitempty"`
+	Source    string `json:"source"` // block, appointment
+	Reason    string `json:"reason,omitempty"`
+	IsFullDay bool   `json:"is_full_day,omitempty"`
 }
 
 type appointmentBusyRow struct {
@@ -57,12 +60,10 @@ func blockToBusyPeriod(block Block) BusyPeriod {
 }
 
 func (s *Service) listExaminerAppointmentsForDay(examinerID uint, date string) ([]BusyPeriod, error) {
-	parsedDate, err := time.Parse("2006-01-02", date)
+	dayStart, dayEnd, err := timeutil.ClinicDayBounds(date)
 	if err != nil {
 		return nil, errors.New("date must use YYYY-MM-DD")
 	}
-	dayStart := parsedDate.UTC().Truncate(24 * time.Hour)
-	dayEnd := dayStart.Add(24 * time.Hour)
 
 	var rows []appointmentBusyRow
 	err = s.db.Table("appointments").
@@ -75,21 +76,17 @@ func (s *Service) listExaminerAppointmentsForDay(examinerID uint, date string) (
 
 	periods := make([]BusyPeriod, 0, len(rows))
 	for _, row := range rows {
-		if row.Duration <= 0 {
-			row.Duration = 150
-		}
-		start := row.ScheduledAt.UTC()
-		end := start.Add(time.Duration(row.Duration) * time.Minute)
+		duration := timeutil.BusyDurationMinutes(row.Duration)
+		start := row.ScheduledAt.In(timeutil.ClinicLocation())
+		end := start.Add(time.Duration(duration) * time.Minute)
 		periods = append(periods, BusyPeriod{
-			StartTime: formatClock(start),
-			EndTime:   formatClock(end),
+			StartTime: timeutil.FormatClock(start),
+			EndTime:   timeutil.FormatClock(end),
+			StartAt:   start.Format(time.RFC3339),
+			EndAt:     end.Format(time.RFC3339),
 			Source:    "appointment",
 			Reason:    "Booked session",
 		})
 	}
 	return periods, nil
-}
-
-func formatClock(t time.Time) string {
-	return fmt.Sprintf("%02d:%02d", t.Hour(), t.Minute())
 }

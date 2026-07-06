@@ -19,6 +19,7 @@ import (
 	"my-app/internal/modules/availability"
 	"my-app/internal/modules/subjects"
 	"my-app/internal/storage"
+	"my-app/internal/timeutil"
 
 	"gorm.io/gorm"
 )
@@ -922,7 +923,7 @@ func (s *Service) validateAppointment(app *Appointment) error {
 	if time.Until(app.ScheduledAt) <= 0 {
 		return errors.New("scheduled_at must be in the future")
 	}
-	if app.ScheduledAt.UTC().Weekday() == time.Sunday {
+	if app.ScheduledAt.In(timeutil.ClinicLocation()).Weekday() == time.Sunday {
 		return errors.New("appointments cannot be scheduled on Sunday")
 	}
 
@@ -974,7 +975,8 @@ func (s *Service) validateAppointment(app *Appointment) error {
 }
 
 func (s *Service) hasAvailabilityConflict(examinerID uint, scheduledAt time.Time, duration int) (bool, error) {
-	dayStart := scheduledAt.UTC().Truncate(24 * time.Hour)
+	local := scheduledAt.In(timeutil.ClinicLocation())
+	dayStart := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, timeutil.ClinicLocation())
 	dayEnd := dayStart.Add(24 * time.Hour)
 
 	var blocks []availability.Block
@@ -985,7 +987,7 @@ func (s *Service) hasAvailabilityConflict(examinerID uint, scheduledAt time.Time
 		return false, nil
 	}
 
-	startMinutes := scheduledAt.UTC().Hour()*60 + scheduledAt.UTC().Minute()
+	startMinutes := timeutil.ClockMinutes(scheduledAt)
 	endMinutes := startMinutes + duration
 	for _, block := range blocks {
 		if block.IsFullDay {
