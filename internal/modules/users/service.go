@@ -89,6 +89,9 @@ func (s *Service) GetExaminers(search string) ([]auth.User, error) {
 
 	var users []auth.User
 	err := query.Order("users.name ASC").Find(&users).Error
+	for i := range users {
+		users[i].HasSignature = users[i].SignatureImage != ""
+	}
 	return users, err
 }
 
@@ -97,6 +100,7 @@ func (s *Service) GetByID(id uint) (*auth.User, error) {
 	if err := s.db.Joins("Role").First(&user, id).Error; err != nil {
 		return nil, err
 	}
+	user.HasSignature = user.SignatureImage != ""
 	return &user, nil
 }
 

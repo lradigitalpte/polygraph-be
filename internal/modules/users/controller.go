@@ -1,6 +1,11 @@
 package users
 
 import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"image/png"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -8,6 +13,8 @@ import (
 
 	"my-app/internal/middleware"
 )
+
+const maxSignatureSize = 1 << 20
 
 type Controller struct {
 	service *Service
@@ -189,6 +196,79 @@ func (ctrl *Controller) UpdateMe(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, user)
+}
+
+func (ctrl *Controller) GetMySignature(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	ctrl.writeSignature(c, userID)
+}
+
+func (ctrl *Controller) GetExaminerSignature(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	ctrl.writeSignature(c, id)
+}
+
+func (ctrl *Controller) writeSignature(c *gin.Context, userID uint) {
+	user, err := ctrl.service.GetByID(userID)
+	if err != nil || user.SignatureImage == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "signature not configured"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"image": user.SignatureImage, "title": user.SignatureTitle, "organization": user.SignatureOrganization})
+}
+
+func (ctrl *Controller) UploadMySignature(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSignatureSize+(1<<20))
+	file, err := c.FormFile("signature")
+	if err != nil || file.Size <= 0 || file.Size > maxSignatureSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A PNG signature up to 1 MB is required"})
+		return
+	}
+	opened, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to read signature"})
+		return
+	}
+	defer opened.Close()
+	data, err := io.ReadAll(io.LimitReader(opened, maxSignatureSize+1))
+	if err != nil || len(data) > maxSignatureSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Signature is too large"})
+		return
+	}
+	config, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width < 20 || config.Height < 10 || config.Width > 3000 || config.Height > 1500 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Signature must be a valid PNG image"})
+		return
+	}
+	imageData := fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString(data))
+	user, err := ctrl.service.SaveSignature(userID, imageData, c.PostForm("title"), c.PostForm("organization"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"has_signature": true, "title": user.SignatureTitle, "organization": user.SignatureOrganization})
+}
+
+func (ctrl *Controller) DeleteMySignature(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	if err := ctrl.service.DeleteSignature(userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (ctrl *Controller) DeleteMe(c *gin.Context) {

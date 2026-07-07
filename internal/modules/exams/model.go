@@ -57,16 +57,22 @@ type ExamQuestion struct {
 
 // ExamReport is the final forensic verdict
 type ExamReport struct {
-	ID                uint       `gorm:"primarykey" json:"id"`
-	ExamID            uint       `gorm:"uniqueIndex" json:"exam_id"`
-	Verdict           string     `gorm:"size:100" json:"verdict"` // DI, NDI, Inconclusive
-	EncryptedReport   string     `gorm:"type:text" json:"-"`
-	Hash              string     `gorm:"size:255" json:"hash"` // For integrity checking
-	CreatedAt         time.Time  `json:"created_at"`
-	SignatureExaminer string     `gorm:"type:text" json:"signature_examiner,omitempty"` // Cryptographic digital signature (base64)
-	SignatureClient   string     `gorm:"type:text" json:"signature_client,omitempty"`   // Cryptographic digital signature (base64)
-	IsLocked          bool       `gorm:"default:false" json:"is_locked"`
-	LockedAt          *time.Time `json:"locked_at,omitempty"`
+	ID                 uint       `gorm:"primarykey" json:"id"`
+	ExamID             uint       `gorm:"uniqueIndex" json:"exam_id"`
+	Verdict            string     `gorm:"size:100" json:"verdict"` // DI, NDI, Inconclusive
+	EncryptedReport    string     `gorm:"type:text" json:"-"`
+	Hash               string     `gorm:"size:255" json:"hash"` // For integrity checking
+	CreatedAt          time.Time  `json:"created_at"`
+	SignatureExaminer  string     `gorm:"type:text" json:"signature_examiner,omitempty"` // Cryptographic digital signature (base64)
+	SignatureImage     string     `gorm:"type:text" json:"-"`
+	SignerExaminerID   uint       `json:"signer_examiner_id,omitempty"`
+	SignerName         string     `gorm:"size:255" json:"signer_name,omitempty"`
+	SignerTitle        string     `gorm:"size:255" json:"signer_title,omitempty"`
+	SignerOrganization string     `gorm:"size:255" json:"signer_organization,omitempty"`
+	SignedAt           *time.Time `json:"signed_at,omitempty"`
+	SignatureClient    string     `gorm:"type:text" json:"signature_client,omitempty"` // Cryptographic digital signature (base64)
+	IsLocked           bool       `gorm:"default:false" json:"is_locked"`
+	LockedAt           *time.Time `json:"locked_at,omitempty"`
 }
 
 // BeforeUpdate prevents modifications if the report is locked
@@ -144,19 +150,21 @@ type ExamPhase struct {
 
 // SecureReportShare tracks secure external distribution links for final reports
 type SecureReportShare struct {
-	ID             uint             `gorm:"primarykey" json:"id"`
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt   `gorm:"index" json:"-"`
-	ExamReportID   uint             `json:"exam_report_id"`
-	ExamReport     *ExamReport      `gorm:"foreignKey:ExamReportID" json:"exam_report,omitempty"`
-	ClientID       uint             `json:"client_id"`
-	SubjectID      uint             `json:"subject_id"`
-	Subject        subjects.Subject `gorm:"foreignKey:SubjectID" json:"subject,omitempty"`
-	RecipientEmail string           `gorm:"size:255;not null" json:"recipient_email"`
-	Token          string           `gorm:"size:255;uniqueIndex;not null" json:"token"`
-	Password       string           `gorm:"size:100;not null" json:"password"`
-	PdfURL         string           `gorm:"size:500" json:"pdf_url"`
-	Status         string           `gorm:"size:50;default:'sent'" json:"status"` // sent, viewed
-	ExpiresAt      time.Time        `json:"expires_at"`
+	ID               uint             `gorm:"primarykey" json:"id"`
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+	DeletedAt        gorm.DeletedAt   `gorm:"index" json:"-"`
+	ExamReportID     uint             `json:"exam_report_id"`
+	ExamReport       *ExamReport      `gorm:"foreignKey:ExamReportID" json:"exam_report,omitempty"`
+	ClientID         uint             `json:"client_id"`
+	SubjectID        uint             `json:"subject_id"`
+	Subject          subjects.Subject `gorm:"foreignKey:SubjectID" json:"subject,omitempty"`
+	RecipientEmail   string           `gorm:"size:255;not null" json:"recipient_email"`
+	Token            string           `gorm:"size:255;uniqueIndex;not null" json:"token"`
+	Password         string           `gorm:"size:100;not null" json:"password"`
+	PdfURL           string           `gorm:"size:500" json:"pdf_url"`
+	VerificationCode string           `gorm:"size:64;uniqueIndex" json:"verification_code"`
+	PDFHash          string           `gorm:"size:64" json:"-"`
+	Status           string           `gorm:"size:50;default:'sent'" json:"status"` // sent, viewed
+	ExpiresAt        time.Time        `json:"expires_at"`
 }

@@ -23,4 +23,8 @@ type User struct {
 	PasswordResetSentAt   *time.Time     `json:"password_reset_sent_at,omitempty"`
 	RoleID                uint           `json:"role_id"`
 	Role                  rbac.Role      `gorm:"foreignKey:RoleID" json:"role,omitempty"`
+	SignatureImage        string         `gorm:"type:text" json:"-"`
+	SignatureTitle        string         `gorm:"size:255" json:"signature_title,omitempty"`
+	SignatureOrganization string         `gorm:"size:255" json:"signature_organization,omitempty"`
+	HasSignature          bool           `gorm:"-" json:"has_signature"`
 }

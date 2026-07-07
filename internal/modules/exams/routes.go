@@ -1,4 +1,4 @@
-﻿package exams
+package exams
 
 import (
 	"github.com/gin-gonic/gin"
@@ -44,5 +44,9 @@ func RegisterPublicRoutes(router *gin.RouterGroup, ctrl *Controller) {
 	{
 		p.GET("/:token", ctrl.GetSecureShare)
 	}
+	v := router.Group("/report-verification")
+	{
+		v.GET("/:code", ctrl.GetReportVerification)
+		v.POST("/:code", ctrl.VerifyReportPDF)
+	}
 }
-

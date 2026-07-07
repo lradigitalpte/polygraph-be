@@ -1,4 +1,4 @@
-﻿package exams
+package exams
 
 import (
 	"bytes"
@@ -12,17 +12,19 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"my-app/internal/email"
+	"my-app/internal/models"
+	"my-app/internal/modules/auth"
+	"my-app/internal/storage"
+	"my-app/internal/utils"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"my-app/internal/email"
-	"my-app/internal/models"
-	"my-app/internal/storage"
-	"my-app/internal/utils"
 	"time"
 
 	"github.com/jung-kurt/gofpdf"
+	qrcode "github.com/skip2/go-qrcode"
 	"gorm.io/gorm"
 )
 
@@ -199,7 +201,11 @@ func (s *Service) UnlockReportForRevision(examID uint, actorID uint, reason stri
 		if err := tx.Session(&gorm.Session{SkipHooks: true}).
 			Model(&ExamReport{}).
 			Where("id = ?", report.ID).
-			Updates(map[string]any{"is_locked": false, "locked_at": nil, "signature_examiner": "", "signature_client": ""}).Error; err != nil {
+			Updates(map[string]any{
+				"is_locked": false, "locked_at": nil, "signature_examiner": "", "signature_client": "",
+				"signature_image": "", "signer_examiner_id": 0, "signer_name": "", "signer_title": "",
+				"signer_organization": "", "signed_at": nil,
+			}).Error; err != nil {
 			return err
 		}
 
@@ -210,18 +216,18 @@ func (s *Service) UnlockReportForRevision(examID uint, actorID uint, reason stri
 		}
 
 		payload, _ := json.Marshal(map[string]any{
-			"exam_id": examID,
-			"exam_report_id": report.ID,
-			"reason": reason,
+			"exam_id":           examID,
+			"exam_report_id":    report.ID,
+			"reason":            reason,
 			"shares_expired_at": now.UTC().Format(time.RFC3339),
 		})
 
 		log := models.AuditLog{
-			UserID: &actorID,
-			Action: "REPORT_OVERRIDE_UNLOCK",
-			Method: "POST",
-			Path: fmt.Sprintf("/api/reports/%d/override-unlock", examID),
-			Status: 200,
+			UserID:  &actorID,
+			Action:  "REPORT_OVERRIDE_UNLOCK",
+			Method:  "POST",
+			Path:    fmt.Sprintf("/api/reports/%d/override-unlock", examID),
+			Status:  200,
 			Payload: string(payload),
 		}
 		return tx.Create(&log).Error
@@ -237,7 +243,7 @@ func (s *Service) UnlockReportForRevision(examID uint, actorID uint, reason stri
 }
 
 // FinalizeReport marks a written report as immutable after examiner sign-off.
-func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string) (*ExamReport, error) {
+func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string, examinerID uint) (*ExamReport, error) {
 	var report ExamReport
 	if err := s.db.Where("exam_id = ?", examID).First(&report).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -254,14 +260,26 @@ func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string) (
 	if strings.TrimSpace(report.EncryptedReport) == "" {
 		return nil, fmt.Errorf("report content is required before finalizing")
 	}
+	var examiner auth.User
+	if err := s.db.Preload("Role").First(&examiner, examinerID).Error; err != nil {
+		return nil, fmt.Errorf("selected examiner was not found")
+	}
+	if !strings.EqualFold(examiner.Role.Name, "Examiner") || !strings.EqualFold(examiner.Status, "active") {
+		return nil, fmt.Errorf("selected user is not an active examiner")
+	}
+	if examiner.SignatureImage == "" || examiner.SignatureTitle == "" || examiner.SignatureOrganization == "" {
+		return nil, fmt.Errorf("selected examiner has not configured their signature")
+	}
 
 	now := time.Now()
 	signaturePayload, _ := json.Marshal(map[string]any{
-		"type":         "examiner_finalize",
-		"user_id":      actorID,
-		"email":        strings.TrimSpace(actorEmail),
-		"finalized_at": now.UTC().Format(time.RFC3339),
-		"report_hash":  report.Hash,
+		"type":          "examiner_finalize",
+		"user_id":       actorID,
+		"email":         strings.TrimSpace(actorEmail),
+		"examiner_id":   examiner.ID,
+		"examiner_name": examiner.Name,
+		"finalized_at":  now.UTC().Format(time.RFC3339),
+		"report_hash":   report.Hash,
 	})
 	signature := base64.StdEncoding.EncodeToString(signaturePayload)
 
@@ -270,25 +288,34 @@ func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string) (
 			Model(&ExamReport{}).
 			Where("id = ?", report.ID).
 			Updates(map[string]any{
-				"is_locked":          true,
-				"locked_at":          &now,
-				"signature_examiner": signature,
+				"is_locked":           true,
+				"locked_at":           &now,
+				"signature_examiner":  signature,
+				"signature_image":     examiner.SignatureImage,
+				"signer_examiner_id":  examiner.ID,
+				"signer_name":         examiner.Name,
+				"signer_title":        examiner.SignatureTitle,
+				"signer_organization": examiner.SignatureOrganization,
+				"signed_at":           &now,
 			}).Error; err != nil {
 			return err
 		}
 
 		payload, _ := json.Marshal(map[string]any{
-			"exam_id":        examID,
-			"exam_report_id": report.ID,
-			"verdict":        report.Verdict,
-			"report_hash":    report.Hash,
+			"exam_id":                    examID,
+			"exam_report_id":             report.ID,
+			"verdict":                    report.Verdict,
+			"report_hash":                report.Hash,
+			"authorized_examiner_id":     examiner.ID,
+			"authorized_examiner_name":   examiner.Name,
+			"authorization_confirmed_by": actorID,
 		})
 		log := models.AuditLog{
-			UserID: &actorID,
-			Action: "REPORT_FINALIZE_LOCK",
-			Method: "POST",
-			Path:   fmt.Sprintf("/api/reports/%d/finalize", examID),
-			Status: 200,
+			UserID:  &actorID,
+			Action:  "REPORT_FINALIZE_LOCK",
+			Method:  "POST",
+			Path:    fmt.Sprintf("/api/reports/%d/finalize", examID),
+			Status:  200,
 			Payload: string(payload),
 		}
 		return tx.Create(&log).Error
@@ -548,29 +575,56 @@ func (s *Service) StartDocumentationForAppointment(appointmentID string) (*Exam,
 }
 
 type StructuredReport struct {
-	Purpose           string `json:"purpose"`
-	Instrument        string `json:"instrument"`
-	PreTestNotes      string `json:"pre_test_notes"`
-	Questions         []struct {
+	Purpose      string `json:"purpose"`
+	Instrument   string `json:"instrument"`
+	PreTestNotes string `json:"pre_test_notes"`
+	Questions    []struct {
 		Text       string `json:"text"`
 		Answer     string `json:"answer"`
 		Evaluation string `json:"evaluation"`
 	} `json:"questions"`
-	PostTestNotes     string `json:"post_test_notes"`
-	Conclusion        string `json:"conclusion"`
-	ReferenceNo       string `json:"reference_no"`
-	ExamDate          string `json:"exam_date"`
-	Section4FollowUp  string `json:"section_4_follow_up"`
-	LimeToneNotes     string `json:"limestone_notes"`
-	PreTestPhaseText  string `json:"pre_test_phase_text"`
-	ExamPhaseText     string `json:"exam_phase_text"`
-	OpinionPhaseText  string `json:"opinion_phase_text"`
+	PostTestNotes    string `json:"post_test_notes"`
+	Conclusion       string `json:"conclusion"`
+	ReferenceNo      string `json:"reference_no"`
+	ExamDate         string `json:"exam_date"`
+	Section4FollowUp string `json:"section_4_follow_up"`
+	LimeToneNotes    string `json:"limestone_notes"`
+	PreTestPhaseText string `json:"pre_test_phase_text"`
+	ExamPhaseText    string `json:"exam_phase_text"`
+	OpinionPhaseText string `json:"opinion_phase_text"`
 }
 
-func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string) ([]byte, error) {
+type PDFSigner struct {
+	Name, Title, Organization, ImageData string
+	SignedAt                             *time.Time
+}
+
+func decodedDataImage(dataURI string) ([]byte, string, error) {
+	parts := strings.SplitN(dataURI, ",", 2)
+	if len(parts) != 2 || !strings.Contains(parts[0], "base64") {
+		return nil, "", errors.New("invalid signature image")
+	}
+	data, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, "", err
+	}
+	return data, "PNG", nil
+}
+
+func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string, verificationCode string, verificationURL string, signer *PDFSigner) ([]byte, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetProtection(gofpdf.CnProtectPrint, password, password)
-	
+	if verificationURL != "" {
+		if qrPNG, err := qrcode.Encode(verificationURL, qrcode.Medium, 256); err == nil {
+			pdf.RegisterImageOptionsReader("verification-qr", gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(qrPNG))
+		}
+	}
+	if signer != nil && signer.ImageData != "" {
+		if signaturePNG, imageType, err := decodedDataImage(signer.ImageData); err == nil {
+			pdf.RegisterImageOptionsReader("examiner-signature", gofpdf.ImageOptions{ImageType: imageType}, bytes.NewReader(signaturePNG))
+		}
+	}
+
 	// Parse report content
 	var reportData StructuredReport
 	isStructured := json.Unmarshal([]byte(content), &reportData) == nil
@@ -578,7 +632,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	// Set header func
 	pdf.SetHeaderFunc(func() {
 		// Draw logo
-		if logoPath := reportAssetPath("logo.png"); logoPath != "" {
+		if logoPath := reportAssetPath("logo-print.png", "logo.png"); logoPath != "" {
 			pdf.Image(logoPath, 15, 12, 45, 0, false, imageTypeFromPath(logoPath), 0, "")
 		} else {
 			// Fallback text if image not found
@@ -586,11 +640,11 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 			pdf.SetTextColor(220, 38, 38)
 			pdf.Text(15, 18, "POLYGRAPH UAE")
 		}
-		
+
 		pdf.SetTextColor(120, 120, 120)
 		pdf.SetFont("Helvetica", "B", 8)
 		pdf.Text(155, 18, "STAFF IN CONFIDENCE")
-		
+
 		pdf.SetDrawColor(200, 200, 200)
 		pdf.SetLineWidth(0.3)
 		pdf.Line(15, 23, 195, 23)
@@ -606,32 +660,39 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		if sapPath := reportAssetPath("singaporeassociationofpolygraph.jpg", "singaporeassociationofpolygraph.jfif"); sapPath != "" {
 			pdf.Image(sapPath, 102, yPos+1.5, 23, 11, false, imageTypeFromPath(sapPath), 0, "")
 		}
-		
+		if verificationURL != "" {
+			pdf.ImageOptions("verification-qr", 171, yPos-1, 17, 17, false, gofpdf.ImageOptions{ImageType: "PNG"}, 0, verificationURL)
+			pdf.SetTextColor(80, 80, 80)
+			pdf.SetFont("Helvetica", "B", 5.5)
+			pdf.SetXY(160, yPos+16)
+			pdf.CellFormat(39, 3, "VERIFY: "+verificationCode, "", 0, "C", false, 0, verificationURL)
+		}
+
 		pdf.SetTextColor(100, 100, 100)
 		pdf.SetFont("Helvetica", "", 7.5)
-		pdf.SetXY(15, yPos + 17)
+		pdf.SetXY(15, yPos+17)
 		pdf.CellFormat(180, 4, "Polygraph International HR Consultancy LLC | Office 401-41, Deyaar building, Al Barsha 1, Dubai, United Arab Emirates", "", 0, "C", false, 0, "")
 		pdf.Ln(4)
 		pdf.CellFormat(180, 4, "Website: www.polygraph.ae | Email: info@polygraph.ae", "", 0, "C", false, 0, "")
-		
+
 		pdf.SetTextColor(120, 120, 120)
 		pdf.SetFont("Helvetica", "B", 8)
-		pdf.SetXY(15, yPos + 26)
+		pdf.SetXY(15, yPos+26)
 		pdf.CellFormat(180, 4, "STAFF IN CONFIDENCE", "", 0, "C", false, 0, "")
 	})
 
 	pdf.SetMargins(15, 32, 15)
 	pdf.SetAutoPageBreak(true, 42) // leaves space for footer
 	pdf.AddPage()
-	
+
 	pdf.SetTextColor(0, 0, 0)
-	
+
 	// Page 1 Content
 	// EXAMINEE INFORMATION
 	pdf.SetFont("Helvetica", "B", 10)
 	pdf.Cell(0, 6, "EXAMINEE INFORMATION")
 	pdf.Ln(7)
-	
+
 	// Detail fields table/list
 	pdf.SetFont("Helvetica", "B", 9)
 	pdf.Cell(30, 6, "OUR REF")
@@ -642,7 +703,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	}
 	pdf.Cell(0, 6, ": "+refNo)
 	pdf.Ln(6)
-	
+
 	pdf.SetFont("Helvetica", "B", 9)
 	pdf.Cell(30, 6, "DATE")
 	pdf.SetFont("Helvetica", "", 9)
@@ -652,19 +713,19 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	}
 	pdf.Cell(0, 6, ": "+examDate)
 	pdf.Ln(6)
-	
+
 	pdf.SetFont("Helvetica", "B", 9)
 	pdf.Cell(30, 6, "EXAMINEE")
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.Cell(0, 6, ": "+subjectName)
 	pdf.Ln(10)
-	
+
 	if isStructured {
 		// SECTION 1: PRE-EXAMINATION PHASE
 		pdf.SetFont("Helvetica", "B", 10)
 		pdf.Cell(0, 6, "SECTION 1: PRE-EXAMINATION PHASE")
 		pdf.Ln(7)
-		
+
 		pdf.SetFont("Helvetica", "", 9.5)
 		preTestText := fmt.Sprintf("On %s at about 14:00 hrs (Dubai Time), I commenced to administer a polygraph examination to the above subject.\n\nA screening polygraph test was administered as part of a pre-employment test for %s.", examDate, clientName)
 		if reportData.PreTestPhaseText != "" {
@@ -672,19 +733,19 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		}
 		pdf.MultiCell(0, 5, preTestText, "", "L", false)
 		pdf.Ln(5)
-		
+
 		preNotes := "Examinee physical and mental health assessed as fit for testing. Legal rights and examination consent form explained and signed."
 		if reportData.PreTestNotes != "" {
 			preNotes = reportData.PreTestNotes
 		}
 		pdf.MultiCell(0, 5, preNotes, "", "L", false)
 		pdf.Ln(10)
-		
+
 		// SECTION 2: EXAMINATION PHASE
 		pdf.SetFont("Helvetica", "B", 10)
 		pdf.Cell(0, 6, "SECTION 2: EXAMINATION PHASE")
 		pdf.Ln(7)
-		
+
 		pdf.SetFont("Helvetica", "", 9.5)
 		examPhaseText := "During the examination phase, the relevant and comparison questions were administered to subject with a set of relevant questions. His verbal responses to the relevant questions were as indicated:"
 		if reportData.ExamPhaseText != "" {
@@ -692,7 +753,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		}
 		pdf.MultiCell(0, 5, examPhaseText, "", "L", false)
 		pdf.Ln(6)
-		
+
 		// Q&A Table
 		if len(reportData.Questions) > 0 {
 			pdf.SetFont("Helvetica", "B", 8)
@@ -700,7 +761,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 			pdf.CellFormat(15, 7, "S/N", "1", 0, "C", true, 0, "")
 			pdf.CellFormat(125, 7, "Questions", "1", 0, "L", true, 0, "")
 			pdf.CellFormat(40, 7, "Examinee Response", "1", 1, "C", true, 0, "")
-			
+
 			pdf.SetFont("Helvetica", "", 9)
 			for idx, q := range reportData.Questions {
 				x, y := pdf.GetX(), pdf.GetY()
@@ -731,7 +792,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 			}
 			pdf.Ln(8)
 		}
-		
+
 		// Limestone / test process text
 		limestoneNotes := "The examination was conducted with a Limestone Technologies Computerised Polygraph, recording the blood pressure, pulse rate, galvanic skin response and breathing pattern of the subject.\n\nFour polygrams, including 1 acquaintance and 3 official tests were recorded, and the process ended at about 15:35 hrs (Dubai Time)."
 		if reportData.LimeToneNotes != "" {
@@ -740,12 +801,12 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.SetFont("Helvetica", "", 9.5)
 		pdf.MultiCell(0, 5, limestoneNotes, "", "L", false)
 		pdf.Ln(10)
-		
+
 		// SECTION 3: OPINION OF EXAMINER
 		pdf.SetFont("Helvetica", "B", 10)
 		pdf.Cell(0, 6, "SECTION 3: OPINION OF EXAMINER")
 		pdf.Ln(7)
-		
+
 		opinionText := fmt.Sprintf("Based on the diagnostic evaluations and analysis of the polygrams, I am in the opinion that the examination on %s as %s.", subjectName, verdict)
 		if reportData.OpinionPhaseText != "" {
 			opinionText = reportData.OpinionPhaseText
@@ -753,18 +814,18 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.SetFont("Helvetica", "", 9.5)
 		pdf.MultiCell(0, 5, opinionText, "", "L", false)
 		pdf.Ln(5)
-		
+
 		postNotes := "Examinee cooperated and the test administration was as per procedure."
 		if reportData.PostTestNotes != "" {
 			postNotes = reportData.PostTestNotes
 		}
 		pdf.MultiCell(0, 5, postNotes, "", "L", false)
 		pdf.Ln(6)
-		
+
 		// Result badge
 		pdf.SetFont("Helvetica", "B", 10)
 		pdf.Cell(25, 6, "Result: ")
-		
+
 		pdf.SetFont("Helvetica", "B", 11)
 		if verdict == "DI" {
 			pdf.SetTextColor(200, 0, 0)
@@ -778,19 +839,19 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		}
 		pdf.SetTextColor(0, 0, 0)
 		pdf.Ln(12)
-		
+
 		// SECTION 4: FOLLOW-UP BY REQUESTING AGENCY
 		pdf.SetFont("Helvetica", "B", 10)
 		pdf.Cell(0, 6, "SECTION 4: FOLLOW-UP BY REQUESTING AGENCY")
 		pdf.Ln(7)
-		
+
 		followUp := "Nil"
 		if reportData.Section4FollowUp != "" {
 			followUp = reportData.Section4FollowUp
 		}
 		pdf.SetFont("Helvetica", "", 9.5)
 		pdf.MultiCell(0, 5, followUp, "", "L", false)
-		
+
 	} else {
 		// Fallback for unstructured text
 		pdf.SetFont("Helvetica", "B", 10)
@@ -798,6 +859,37 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.Ln(7)
 		pdf.SetFont("Helvetica", "", 9.5)
 		pdf.MultiCell(0, 5.5, content, "", "L", false)
+	}
+
+	if signer != nil && signer.Name != "" {
+		if pdf.GetY() > 218 {
+			pdf.AddPage()
+		}
+		pdf.Ln(10)
+		pdf.SetFont("Helvetica", "B", 8)
+		pdf.SetTextColor(80, 80, 80)
+		pdf.Cell(0, 4, "Electronically signed by:")
+		pdf.Ln(5)
+		if signer.ImageData != "" {
+			pdf.ImageOptions("examiner-signature", 15, pdf.GetY(), 42, 14, false, gofpdf.ImageOptions{ImageType: "PNG"}, 0, "")
+			pdf.Ln(15)
+		}
+		pdf.SetTextColor(0, 0, 0)
+		pdf.SetFont("Helvetica", "B", 9)
+		pdf.Cell(0, 4, signer.Name)
+		pdf.Ln(4)
+		pdf.SetFont("Helvetica", "", 8)
+		pdf.Cell(0, 4, signer.Title)
+		pdf.Ln(4)
+		pdf.Cell(0, 4, signer.Organization)
+		pdf.Ln(4)
+		if signer.SignedAt != nil {
+			pdf.Cell(0, 4, "Signed: "+signer.SignedAt.UTC().Add(4*time.Hour).Format("2 January 2006, 15:04")+" GST")
+			pdf.Ln(4)
+		}
+		if verificationCode != "" {
+			pdf.Cell(0, 4, "Verification: "+verificationCode)
+		}
 	}
 
 	var buf bytes.Buffer
@@ -822,6 +914,16 @@ func generateToken() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+func generateVerificationCode() string {
+	raw := strings.ToUpper(generateToken()[:20])
+	return fmt.Sprintf("%s-%s-%s-%s", raw[0:5], raw[5:10], raw[10:15], raw[15:20])
+}
+
+func pdfSHA256(pdfBytes []byte) string {
+	sum := sha256.Sum256(pdfBytes)
+	return hex.EncodeToString(sum[:])
 }
 
 func normalizeShareExpiryDays(days int) int {
@@ -928,6 +1030,12 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 	// Generate passcode & token
 	passcode := generatePasscode()
 	token := generateToken()
+	verificationCode := generateVerificationCode()
+	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	verificationURL := fmt.Sprintf("%s/verify/%s", strings.TrimSuffix(frontendURL, "/"), verificationCode)
 
 	// Generate PDF
 	subjectName := fmt.Sprintf("%s %s", exam.Subject.FirstName, exam.Subject.LastName)
@@ -939,7 +1047,8 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 		examTypeName = "Polygraph Forensic Exam"
 	}
 
-	pdfBytes, err := GenerateEncryptedPDF(report.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode)
+	signer := &PDFSigner{Name: report.SignerName, Title: report.SignerTitle, Organization: report.SignerOrganization, ImageData: report.SignatureImage, SignedAt: report.SignedAt}
+	pdfBytes, err := GenerateEncryptedPDF(report.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode, verificationCode, verificationURL, signer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate encrypted PDF: %w", err)
 	}
@@ -957,15 +1066,17 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 
 	// Save GORM record
 	share := SecureReportShare{
-		ExamReportID:   reportID,
-		ClientID:       exam.ClientID,
-		SubjectID:      exam.SubjectID,
-		RecipientEmail: recipientEmail,
-		Token:          token,
-		Password:       passcode,
-		PdfURL:         pdfURL,
-		Status:         "sent",
-		ExpiresAt:      expiresAt,
+		ExamReportID:     reportID,
+		ClientID:         exam.ClientID,
+		SubjectID:        exam.SubjectID,
+		RecipientEmail:   recipientEmail,
+		Token:            token,
+		Password:         passcode,
+		PdfURL:           pdfURL,
+		VerificationCode: verificationCode,
+		PDFHash:          pdfSHA256(pdfBytes),
+		Status:           "sent",
+		ExpiresAt:        expiresAt,
 	}
 
 	if err := s.db.Create(&share).Error; err != nil {
@@ -973,10 +1084,6 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 	}
 
 	// Email delivery
-	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
-	if frontendURL == "" {
-		frontendURL = "http://localhost:3000"
-	}
 	secureLink := fmt.Sprintf("%s/shared/report/%s", strings.TrimSuffix(frontendURL, "/"), token)
 
 	subjectLine := fmt.Sprintf("CONFIDENTIAL: Polygraph Report for %s", subjectName)
@@ -999,7 +1106,16 @@ func (s *Service) GetSecureReportShareByToken(token string) (*SecureReportShare,
 	if err != nil {
 		return nil, err
 	}
+	// Keep the S3 bucket private. The stored URL is canonical and private; only
+	// return a short-lived URL authorised for this single download.
+	share.PdfURL = storage.SignedURLForStored(context.Background(), s.storage, share.PdfURL)
 	return &share, nil
+}
+
+func (s *Service) GetReportVerification(code string) (*SecureReportShare, error) {
+	var share SecureReportShare
+	err := s.db.Preload("ExamReport").Where("verification_code = ?", strings.ToUpper(strings.TrimSpace(code))).First(&share).Error
+	return &share, err
 }
 
 func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureReportShare, error) {
@@ -1031,6 +1147,12 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 	// Rotate passcode & token
 	passcode := generatePasscode()
 	token := generateToken()
+	verificationCode := generateVerificationCode()
+	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	verificationURL := fmt.Sprintf("%s/verify/%s", strings.TrimSuffix(frontendURL, "/"), verificationCode)
 
 	// Regenerate PDF
 	subjectName := fmt.Sprintf("%s %s", exam.Subject.FirstName, exam.Subject.LastName)
@@ -1042,7 +1164,8 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 		examTypeName = "Polygraph Forensic Exam"
 	}
 
-	pdfBytes, err := GenerateEncryptedPDF(share.ExamReport.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode)
+	signer := &PDFSigner{Name: share.ExamReport.SignerName, Title: share.ExamReport.SignerTitle, Organization: share.ExamReport.SignerOrganization, ImageData: share.ExamReport.SignatureImage, SignedAt: share.ExamReport.SignedAt}
+	pdfBytes, err := GenerateEncryptedPDF(share.ExamReport.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode, verificationCode, verificationURL, signer)
 	if err != nil {
 		return nil, err
 	}
@@ -1060,11 +1183,13 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 
 	// Update record
 	updates := map[string]any{
-		"token":      token,
-		"password":   passcode,
-		"pdf_url":    pdfURL,
-		"status":     "sent",
-		"expires_at": expiresAt,
+		"token":             token,
+		"password":          passcode,
+		"pdf_url":           pdfURL,
+		"verification_code": verificationCode,
+		"pdf_hash":          pdfSHA256(pdfBytes),
+		"status":            "sent",
+		"expires_at":        expiresAt,
 	}
 
 	if err := s.db.Model(&share).Updates(updates).Error; err != nil {
@@ -1077,7 +1202,6 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 	}
 
 	// Send email again
-	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
 	if frontendURL == "" {
 		frontendURL = "http://localhost:3000"
 	}
@@ -1094,6 +1218,3 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 
 	return &share, nil
 }
-
-
-

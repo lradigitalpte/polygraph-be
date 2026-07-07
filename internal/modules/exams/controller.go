@@ -1,14 +1,20 @@
-﻿package exams
+package exams
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"my-app/internal/middleware"
 	"net/http"
 	"strconv"
 	"strings"
-	"my-app/internal/middleware"
 
 	"github.com/gin-gonic/gin"
 )
+
+const maxVerificationPDFSize = 20 << 20
 
 type Controller struct {
 	service *Service
@@ -150,15 +156,15 @@ func (ctrl *Controller) GetReport(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":                  report.ID,
-		"exam_id":             report.ExamID,
-		"verdict":             report.Verdict,
-		"content":             decrypted,
-		"created_at":          report.CreatedAt,
-		"is_locked":           report.IsLocked,
-		"locked_at":           report.LockedAt,
-		"signature_examiner":  report.SignatureExaminer,
-		"signature_client":    report.SignatureClient,
+		"id":                 report.ID,
+		"exam_id":            report.ExamID,
+		"verdict":            report.Verdict,
+		"content":            decrypted,
+		"created_at":         report.CreatedAt,
+		"is_locked":          report.IsLocked,
+		"locked_at":          report.LockedAt,
+		"signature_examiner": report.SignatureExaminer,
+		"signature_client":   report.SignatureClient,
 	})
 }
 
@@ -181,8 +187,16 @@ func (ctrl *Controller) FinalizeReport(c *gin.Context) {
 	}
 	actorEmail, _ := c.Get("email")
 	emailStr, _ := actorEmail.(string)
+	var input struct {
+		ExaminerID             uint `json:"examiner_id" binding:"required"`
+		AuthorizationConfirmed bool `json:"authorization_confirmed" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil || !input.AuthorizationConfirmed {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Examiner authorization confirmation is required"})
+		return
+	}
 
-	report, finalizeErr := ctrl.service.FinalizeReport(uint(examID), userID, emailStr)
+	report, finalizeErr := ctrl.service.FinalizeReport(uint(examID), userID, emailStr, input.ExaminerID)
 	if finalizeErr != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(finalizeErr.Error(), "not found") {
@@ -200,6 +214,8 @@ func (ctrl *Controller) FinalizeReport(c *gin.Context) {
 		"is_locked":          report.IsLocked,
 		"locked_at":          report.LockedAt,
 		"signature_examiner": report.SignatureExaminer,
+		"signer_name":        report.SignerName,
+		"signed_at":          report.SignedAt,
 	})
 }
 
@@ -240,8 +256,8 @@ func (ctrl *Controller) OverrideUnlockReport(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"id": report.ID,
-		"exam_id": report.ExamID,
+		"id":        report.ID,
+		"exam_id":   report.ExamID,
 		"is_locked": report.IsLocked,
 		"locked_at": report.LockedAt,
 	})
@@ -477,6 +493,69 @@ func (ctrl *Controller) GetSecureShare(c *gin.Context) {
 	c.JSON(http.StatusOK, share)
 }
 
+func (ctrl *Controller) GetReportVerification(c *gin.Context) {
+	share, err := ctrl.service.GetReportVerification(c.Param("code"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"valid": false, "error": "Verification record not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"valid":             true,
+		"verification_code": share.VerificationCode,
+		"issued_at":         share.CreatedAt,
+		"report_locked":     share.ExamReport != nil && share.ExamReport.IsLocked,
+	})
+}
+
+func (ctrl *Controller) VerifyReportPDF(c *gin.Context) {
+	share, err := ctrl.service.GetReportVerification(c.Param("code"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"valid": false, "error": "Verification record not found"})
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxVerificationPDFSize+(1<<20))
+	file, err := c.FormFile("file")
+	if err != nil || file.Size <= 0 || file.Size > maxVerificationPDFSize {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "error": "A PDF up to 20 MB is required"})
+		return
+	}
+	opened, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "error": "Unable to read PDF"})
+		return
+	}
+	defer opened.Close()
+	hasher := sha256.New()
+	buffer := make([]byte, 512)
+	n, _ := opened.Read(buffer)
+	if n < 5 || string(buffer[:5]) != "%PDF-" {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "error": "The uploaded file is not a PDF"})
+		return
+	}
+	hasher.Write(buffer[:n])
+	if _, err := io.Copy(hasher, opened); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "error": "Unable to read PDF"})
+		return
+	}
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	locked := share.ExamReport != nil && share.ExamReport.IsLocked
+	hashMatches := share.PDFHash != "" && subtle.ConstantTimeCompare([]byte(actualHash), []byte(share.PDFHash)) == 1
+	authentic := hashMatches && locked
+	message := "Invalid - this PDF has been modified or was not issued by us"
+	if hashMatches && !locked {
+		message = "Invalid - this report has been revoked or reopened for revision"
+	} else if authentic {
+		message = "Authentic - this PDF is unchanged"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"valid":             authentic,
+		"verification_code": share.VerificationCode,
+		"issued_at":         share.CreatedAt,
+		"report_locked":     locked,
+		"message":           message,
+	})
+}
+
 func (ctrl *Controller) RegenerateSecureShare(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -507,4 +586,3 @@ func (ctrl *Controller) GetConsolidatedStats(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, stats)
 }
-

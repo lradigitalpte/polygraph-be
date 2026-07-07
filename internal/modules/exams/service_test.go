@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"my-app/internal/models"
+	"my-app/internal/modules/auth"
+	"my-app/internal/modules/rbac"
 	"my-app/internal/modules/subjects"
 
 	"github.com/glebarez/sqlite"
@@ -31,6 +33,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 
 	err = db.AutoMigrate(
+		&rbac.Role{},
+		&auth.User{},
 		&subjects.Subject{},
 		&Exam{},
 		&ExamQuestion{},
@@ -122,14 +126,18 @@ func TestService_FinalizeReport(t *testing.T) {
 
 	_, err := s.CreateReport(exam.ID, "NDI", "Subject is telling the truth")
 	require.NoError(t, err)
+	role := rbac.Role{Name: "Examiner"}
+	require.NoError(t, db.Create(&role).Error)
+	examiner := auth.User{Name: "Malaravan Ron", Email: "examiner@example.com", Status: "active", RoleID: role.ID, SignatureImage: "data:image/png;base64,dGVzdA==", SignatureTitle: "Private Polygraph Examiner", SignatureOrganization: "Polygraph International HR Consultancy LLC"}
+	require.NoError(t, db.Omit("Role").Create(&examiner).Error)
 
-	finalized, err := s.FinalizeReport(exam.ID, 1, "examiner@example.com")
+	finalized, err := s.FinalizeReport(exam.ID, 1, "admin@example.com", examiner.ID)
 	assert.NoError(t, err)
 	assert.True(t, finalized.IsLocked)
 	assert.NotNil(t, finalized.LockedAt)
 	assert.NotEmpty(t, finalized.SignatureExaminer)
 
-	_, err = s.FinalizeReport(exam.ID, 1, "examiner@example.com")
+	_, err = s.FinalizeReport(exam.ID, 1, "admin@example.com", examiner.ID)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already locked")
 }

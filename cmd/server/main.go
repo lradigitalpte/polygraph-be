@@ -43,12 +43,12 @@ import (
 	"my-app/internal/modules/exams"
 	"my-app/internal/modules/forms"
 	"my-app/internal/modules/intake"
+	"my-app/internal/modules/inventory"
 	"my-app/internal/modules/leads"
 	"my-app/internal/modules/rbac"
 	"my-app/internal/modules/settings"
 	"my-app/internal/modules/subjects"
 	"my-app/internal/modules/users"
-	"my-app/internal/modules/inventory"
 	"my-app/internal/storage"
 
 	"github.com/joho/godotenv"
@@ -225,7 +225,7 @@ func main() {
 	subjectService := subjects.NewService()
 	subjectCtrl := subjects.NewController(subjectService)
 
-	examService := exams.NewService(db, s3Storage)
+	examService := exams.NewService(db, fileStorage)
 	examCtrl := exams.NewController(examService)
 
 	appService := appointments.NewService(fileStorage)

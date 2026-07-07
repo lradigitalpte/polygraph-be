@@ -8,6 +8,9 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		me.GET("", ctrl.GetMe)
 		me.GET("/permissions", ctrl.GetMyPermissions)
 		me.PATCH("", ctrl.UpdateMe)
+		me.GET("/signature", ctrl.GetMySignature)
+		me.POST("/signature", ctrl.UploadMySignature)
+		me.DELETE("/signature", ctrl.DeleteMySignature)
 		me.DELETE("", ctrl.DeleteMe)
 	}
 
@@ -16,6 +19,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		users.GET("", permissionMiddleware("user:view"), ctrl.GetAll)
 		// Examiner roster is scheduling context (mapping examiner_id → name), not user admin.
 		users.GET("/examiners", permissionMiddleware("appointment:view"), ctrl.GetExaminers)
+		users.GET("/:id/signature", permissionMiddleware("exam:report"), ctrl.GetExaminerSignature)
 		users.POST("", permissionMiddleware("user:create"), ctrl.Create)
 		users.GET("/:id", permissionMiddleware("user:view"), ctrl.GetByID)
 		users.GET("/:id/activity", permissionMiddleware("user:view"), ctrl.GetActivity)

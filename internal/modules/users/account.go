@@ -14,6 +14,31 @@ type UpdateMeInput struct {
 	Name string `json:"name"`
 }
 
+func (s *Service) SaveSignature(userID uint, imageData, title, organization string) (*auth.User, error) {
+	title = strings.TrimSpace(title)
+	organization = strings.TrimSpace(organization)
+	if imageData == "" || title == "" || organization == "" {
+		return nil, errors.New("signature image, title, and organization are required")
+	}
+	if err := s.db.Model(&auth.User{}).Where("id = ?", userID).Updates(map[string]any{
+		"signature_image": imageData, "signature_title": title, "signature_organization": organization,
+	}).Error; err != nil {
+		return nil, err
+	}
+	s.invalidateUsersCache()
+	return s.GetByID(userID)
+}
+
+func (s *Service) DeleteSignature(userID uint) error {
+	if err := s.db.Model(&auth.User{}).Where("id = ?", userID).Updates(map[string]any{
+		"signature_image": "", "signature_title": "", "signature_organization": "",
+	}).Error; err != nil {
+		return err
+	}
+	s.invalidateUsersCache()
+	return nil
+}
+
 func (s *Service) GetMe(userID uint) (*auth.User, error) {
 	return s.GetByID(userID)
 }
