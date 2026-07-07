@@ -81,7 +81,7 @@ func (s *Service) GetAll() ([]auth.User, error) {
 }
 
 func (s *Service) GetExaminers(search string) ([]auth.User, error) {
-	query := s.db.Preload("Role").Joins("JOIN roles ON users.role_id = roles.id").Where("roles.name = ?", "Examiner").Where("LOWER(users.status) IN ?", []string{"active", "pending"})
+	query := s.db.Select("users.*").Preload("Role").Joins("JOIN roles ON users.role_id = roles.id").Where("roles.name = ?", "Examiner").Where("LOWER(users.status) IN ?", []string{"active", "pending"})
 	if trimmed := strings.TrimSpace(strings.ToLower(search)); trimmed != "" {
 		like := "%" + trimmed + "%"
 		query = query.Where("LOWER(users.name) LIKE ? OR LOWER(users.email) LIKE ?", like, like)
