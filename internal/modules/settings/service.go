@@ -46,7 +46,7 @@ func (s *Service) GetOrganization() (*OrganizationSettings, error) {
 		row = OrganizationSettings{
 			ID:         singletonID,
 			Name:       "Polygraph Forensic Labs",
-			Currency:   "USD",
+			Currency:   "AED",
 			UsdAedRate: 3.6725,
 			UsdGbpRate: 0.7850,
 			UsdEurRate: 0.9250,
@@ -75,7 +75,7 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 
 	currency := strings.TrimSpace(input.Currency)
 	if currency == "" {
-		currency = "USD"
+		currency = "AED"
 	}
 
 	updates := map[string]interface{}{
