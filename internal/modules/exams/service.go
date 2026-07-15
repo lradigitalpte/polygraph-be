@@ -584,7 +584,7 @@ type StructuredReport struct {
 		Evaluation string `json:"evaluation"`
 	} `json:"questions"`
 	PostTestNotes    string `json:"post_test_notes"`
-	Conclusion       string `json:"conclusion"`
+	Conclusion       string `json:"conclusion,omitempty"` // legacy; not rendered in PDF
 	ReferenceNo      string `json:"reference_no"`
 	ExamDate         string `json:"exam_date"`
 	Section4FollowUp string `json:"section_4_follow_up"`
@@ -612,6 +612,7 @@ func decodedDataImage(dataURI string) ([]byte, string, error) {
 }
 
 func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string, verificationCode string, verificationURL string, signer *PDFSigner) ([]byte, error) {
+	subjectName = strings.ToUpper(strings.TrimSpace(subjectName))
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.SetProtection(gofpdf.CnProtectPrint, password, password)
 	if verificationURL != "" {
@@ -689,7 +690,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 
 	// Page 1 Content
 	// EXAMINEE INFORMATION
-	pdf.SetFont("Helvetica", "B", 10)
+	pdf.SetFont("Helvetica", "BU", 10)
 	pdf.Cell(0, 6, "EXAMINEE INFORMATION")
 	pdf.Ln(7)
 
@@ -697,8 +698,8 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	pdf.SetFont("Helvetica", "B", 9)
 	pdf.Cell(30, 6, "OUR REF")
 	pdf.SetFont("Helvetica", "", 9)
-	refNo := "PIN/CONF/2026/001"
-	if isStructured && reportData.ReferenceNo != "" {
+	refNo := ""
+	if isStructured {
 		refNo = reportData.ReferenceNo
 	}
 	pdf.Cell(0, 6, ": "+refNo)
@@ -707,8 +708,8 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	pdf.SetFont("Helvetica", "B", 9)
 	pdf.Cell(30, 6, "DATE")
 	pdf.SetFont("Helvetica", "", 9)
-	examDate := time.Now().Format("02nd May 2006")
-	if isStructured && reportData.ExamDate != "" {
+	examDate := ""
+	if isStructured {
 		examDate = reportData.ExamDate
 	}
 	pdf.Cell(0, 6, ": "+examDate)
@@ -721,106 +722,125 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	pdf.Ln(10)
 
 	if isStructured {
-		// SECTION 1: PRE-EXAMINATION PHASE
-		pdf.SetFont("Helvetica", "B", 10)
-		pdf.Cell(0, 6, "SECTION 1: PRE-EXAMINATION PHASE")
-		pdf.Ln(7)
-
-		pdf.SetFont("Helvetica", "", 9.5)
-		preTestText := fmt.Sprintf("On %s at about 14:00 hrs (Dubai Time), I commenced to administer a polygraph examination to the above subject.\n\nA screening polygraph test was administered as part of a pre-employment test for %s.", examDate, clientName)
-		if reportData.PreTestPhaseText != "" {
-			preTestText = reportData.PreTestPhaseText
+		writeReportParagraph := func(text string, afterLn float64) {
+			if strings.TrimSpace(text) == "" {
+				return
+			}
+			pdf.SetFont("Helvetica", "", 9.5)
+			pdf.MultiCell(0, 5, text, "", "L", false)
+			if afterLn > 0 {
+				pdf.Ln(afterLn)
+			}
 		}
-		pdf.MultiCell(0, 5, preTestText, "", "L", false)
-		pdf.Ln(5)
 
-		preNotes := "Examinee physical and mental health assessed as fit for testing. Legal rights and examination consent form explained and signed."
-		if reportData.PreTestNotes != "" {
-			preNotes = reportData.PreTestNotes
+		writeSectionHeading := func(title string) {
+			pdf.SetFont("Helvetica", "BU", 10)
+			pdf.Cell(0, 6, title)
+			pdf.Ln(7)
 		}
-		pdf.MultiCell(0, 5, preNotes, "", "L", false)
-		pdf.Ln(10)
+
+		// SECTION 1: PRE-EXAMINATION PHASE — builder content only, no hardcoded fallbacks
+		writeSectionHeading("SECTION 1: PRE-EXAMINATION PHASE")
+
+		writeReportParagraph(reportData.PreTestPhaseText, 5)
+		writeReportParagraph(reportData.PreTestNotes, 10)
 
 		// SECTION 2: EXAMINATION PHASE
-		pdf.SetFont("Helvetica", "B", 10)
-		pdf.Cell(0, 6, "SECTION 2: EXAMINATION PHASE")
-		pdf.Ln(7)
+		writeSectionHeading("SECTION 2: EXAMINATION PHASE")
 
-		pdf.SetFont("Helvetica", "", 9.5)
-		examPhaseText := "During the examination phase, the relevant and comparison questions were administered to subject with a set of relevant questions. His verbal responses to the relevant questions were as indicated:"
-		if reportData.ExamPhaseText != "" {
-			examPhaseText = reportData.ExamPhaseText
-		}
-		pdf.MultiCell(0, 5, examPhaseText, "", "L", false)
-		pdf.Ln(6)
+		writeReportParagraph(reportData.ExamPhaseText, 6)
 
-		// Q&A Table
+		// Q&A Table — draw fixed-height row boxes so MultiCell wraps never break borders
 		if len(reportData.Questions) > 0 {
-			pdf.SetFont("Helvetica", "B", 8)
-			pdf.SetFillColor(250, 250, 250)
-			pdf.CellFormat(15, 7, "S/N", "1", 0, "C", true, 0, "")
-			pdf.CellFormat(125, 7, "Questions", "1", 0, "L", true, 0, "")
-			pdf.CellFormat(40, 7, "Examinee Response", "1", 1, "C", true, 0, "")
+			const (
+				colSN   = 15.0
+				colQ    = 125.0
+				colA    = 40.0
+				lineH   = 5.0
+				cellPad = 2.0
+				headerH = 7.0
+			)
+			textWidth := colQ - (cellPad * 2)
 
-			pdf.SetFont("Helvetica", "", 9)
-			for idx, q := range reportData.Questions {
+			drawQuestionHeader := func() {
+				pdf.SetFont("Helvetica", "B", 8)
+				pdf.SetFillColor(250, 250, 250)
+				pdf.SetDrawColor(0, 0, 0)
+				pdf.SetLineWidth(0.2)
 				x, y := pdf.GetX(), pdf.GetY()
+				pdf.Rect(x, y, colSN, headerH, "DF")
+				pdf.Rect(x+colSN, y, colQ, headerH, "DF")
+				pdf.Rect(x+colSN+colQ, y, colA, headerH, "DF")
+				pdf.SetXY(x, y)
+				pdf.CellFormat(colSN, headerH, "S/N", "", 0, "C", false, 0, "")
+				pdf.CellFormat(colQ, headerH, " Questions", "", 0, "L", false, 0, "")
+				pdf.CellFormat(colA, headerH, "Examinee Response", "", 1, "C", false, 0, "")
+			}
 
+			drawQuestionHeader()
+
+			for idx, q := range reportData.Questions {
 				questionText := strings.TrimSpace(q.Text)
 				if questionText == "" {
 					questionText = "-"
 				}
-
-				pdf.SetFont("Helvetica", "I", 9)
-				lines := pdf.SplitLines([]byte(questionText), 119)
-				h := float64(len(lines)) * 6
-				if h < 8 {
-					h = 8
+				answerText := strings.TrimSpace(q.Answer)
+				if answerText == "" {
+					answerText = "-"
 				}
 
-				pdf.SetXY(x, y)
-				pdf.SetFont("Helvetica", "", 9)
-				pdf.CellFormat(15, h, strconv.Itoa(idx+1), "1", 0, "C", false, 0, "")
-
-				pdf.SetXY(x+15, y)
 				pdf.SetFont("Helvetica", "I", 9)
-				pdf.MultiCell(125, 6, questionText, "1", "L", false)
+				lines := pdf.SplitLines([]byte(questionText), textWidth)
+				nLines := len(lines)
+				if nLines < 1 {
+					nLines = 1
+				}
+				rowH := float64(nLines)*lineH + (cellPad * 2)
+				if rowH < 8 {
+					rowH = 8
+				}
 
-				pdf.SetXY(x+140, y)
+				// Keep rows on the page; re-draw header after a break
+				if pdf.GetY()+rowH > 255 {
+					pdf.AddPage()
+					drawQuestionHeader()
+				}
+
+				x, y := pdf.GetX(), pdf.GetY()
+				pdf.SetDrawColor(0, 0, 0)
+				pdf.SetLineWidth(0.2)
+				pdf.Rect(x, y, colSN, rowH, "D")
+				pdf.Rect(x+colSN, y, colQ, rowH, "D")
+				pdf.Rect(x+colSN+colQ, y, colA, rowH, "D")
+
+				// S/N — vertically centered
+				pdf.SetFont("Helvetica", "", 9)
+				pdf.SetXY(x, y+(rowH-lineH)/2)
+				pdf.CellFormat(colSN, lineH, strconv.Itoa(idx+1), "", 0, "C", false, 0, "")
+
+				// Question — padded MultiCell, no cell border (box already drawn)
+				pdf.SetFont("Helvetica", "I", 9)
+				pdf.SetXY(x+colSN+cellPad, y+cellPad)
+				pdf.MultiCell(textWidth, lineH, questionText, "", "L", false)
+
+				// Answer — vertically centered
 				pdf.SetFont("Helvetica", "B", 9)
-				pdf.CellFormat(40, h, q.Answer, "1", 1, "C", false, 0, "")
+				pdf.SetXY(x+colSN+colQ, y+(rowH-lineH)/2)
+				pdf.CellFormat(colA, lineH, answerText, "", 0, "C", false, 0, "")
+
+				pdf.SetXY(x, y+rowH)
 			}
 			pdf.Ln(8)
 		}
 
-		// Limestone / test process text
-		limestoneNotes := "The examination was conducted with a Limestone Technologies Computerised Polygraph, recording the blood pressure, pulse rate, galvanic skin response and breathing pattern of the subject.\n\nFour polygrams, including 1 acquaintance and 3 official tests were recorded, and the process ended at about 15:35 hrs (Dubai Time)."
-		if reportData.LimeToneNotes != "" {
-			limestoneNotes = reportData.LimeToneNotes
-		}
-		pdf.SetFont("Helvetica", "", 9.5)
-		pdf.MultiCell(0, 5, limestoneNotes, "", "L", false)
-		pdf.Ln(10)
+		writeReportParagraph(reportData.LimeToneNotes, 10)
 
-		// SECTION 3: OPINION OF EXAMINER
-		pdf.SetFont("Helvetica", "B", 10)
-		pdf.Cell(0, 6, "SECTION 3: OPINION OF EXAMINER")
-		pdf.Ln(7)
+		// SECTION 3 always starts on a new page
+		pdf.AddPage()
+		writeSectionHeading("SECTION 3: OPINION OF EXAMINER")
 
-		opinionText := fmt.Sprintf("Based on the diagnostic evaluations and analysis of the polygrams, I am in the opinion that the examination on %s as %s.", subjectName, verdict)
-		if reportData.OpinionPhaseText != "" {
-			opinionText = reportData.OpinionPhaseText
-		}
-		pdf.SetFont("Helvetica", "", 9.5)
-		pdf.MultiCell(0, 5, opinionText, "", "L", false)
-		pdf.Ln(5)
-
-		postNotes := "Examinee cooperated and the test administration was as per procedure."
-		if reportData.PostTestNotes != "" {
-			postNotes = reportData.PostTestNotes
-		}
-		pdf.MultiCell(0, 5, postNotes, "", "L", false)
-		pdf.Ln(6)
+		writeReportParagraph(reportData.OpinionPhaseText, 5)
+		writeReportParagraph(reportData.PostTestNotes, 6)
 
 		// Result badge
 		pdf.SetFont("Helvetica", "B", 10)
@@ -841,16 +861,9 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.Ln(12)
 
 		// SECTION 4: FOLLOW-UP BY REQUESTING AGENCY
-		pdf.SetFont("Helvetica", "B", 10)
-		pdf.Cell(0, 6, "SECTION 4: FOLLOW-UP BY REQUESTING AGENCY")
-		pdf.Ln(7)
+		writeSectionHeading("SECTION 4: FOLLOW-UP BY REQUESTING AGENCY")
 
-		followUp := "Nil"
-		if reportData.Section4FollowUp != "" {
-			followUp = reportData.Section4FollowUp
-		}
-		pdf.SetFont("Helvetica", "", 9.5)
-		pdf.MultiCell(0, 5, followUp, "", "L", false)
+		writeReportParagraph(reportData.Section4FollowUp, 0)
 
 	} else {
 		// Fallback for unstructured text
