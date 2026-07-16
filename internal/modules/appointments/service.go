@@ -920,9 +920,8 @@ func (s *Service) validateAppointment(app *Appointment) error {
 	if app.ExamFee < 0 {
 		return errors.New("exam_fee cannot be negative")
 	}
-	if time.Until(app.ScheduledAt) <= 0 {
-		return errors.New("scheduled_at must be in the future")
-	}
+	// Past scheduled_at is allowed so staff can log exams that already happened
+	// (forgot to book, report generation, etc.). The booking UI surfaces a backdated notice.
 	if app.ScheduledAt.In(timeutil.ClinicLocation()).Weekday() == time.Sunday {
 		return errors.New("appointments cannot be scheduled on Sunday")
 	}

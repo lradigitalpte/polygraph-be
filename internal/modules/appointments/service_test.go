@@ -139,6 +139,37 @@ func TestService_CreateAndGetAllAppointments(t *testing.T) {
 	assert.Equal(t, "pending", apps[0].Status)
 }
 
+func TestService_CreateAppointmentAllowsPastScheduledAt(t *testing.T) {
+	db := setupTestDB(t)
+	s := &Service{db: db}
+
+	client := &Client{Name: "Backdate Client", Email: "backdate@test.com"}
+	require.NoError(t, s.CreateClient(client))
+	examiner := seedBookableExaminer(t, db)
+	subject := seedSubject(t, db)
+
+	// Yesterday at 10:00 Dubai time — skip Sundays the same way bookableTime does.
+	loc, err := time.LoadLocation("Asia/Dubai")
+	require.NoError(t, err)
+	nowLocal := time.Now().In(loc)
+	past := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 10, 0, 0, 0, loc).Add(-24 * time.Hour)
+	for past.Weekday() == time.Sunday {
+		past = past.Add(-24 * time.Hour)
+	}
+
+	app := &Appointment{
+		ClientID:    client.ID,
+		SubjectID:   subject.ID,
+		ExaminerID:  examiner.ID,
+		ScheduledAt: past.UTC(),
+		Duration:    150,
+		Status:      "pending",
+	}
+
+	require.NoError(t, s.CreateAppointment(app))
+	assert.NotZero(t, app.ID)
+}
+
 func TestService_UpdateStatus(t *testing.T) {
 	db := setupTestDB(t)
 	s := &Service{db: db}

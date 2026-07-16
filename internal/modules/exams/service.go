@@ -587,6 +587,7 @@ type StructuredReport struct {
 	Conclusion       string `json:"conclusion,omitempty"` // legacy; not rendered in PDF
 	ReferenceNo      string `json:"reference_no"`
 	ExamDate         string `json:"exam_date"`
+	ReportDate       string `json:"report_date"`
 	Section4FollowUp string `json:"section_4_follow_up"`
 	LimeToneNotes    string `json:"limestone_notes"`
 	PreTestPhaseText string `json:"pre_test_phase_text"`
@@ -672,7 +673,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.SetTextColor(100, 100, 100)
 		pdf.SetFont("Helvetica", "", 7.5)
 		pdf.SetXY(15, yPos+17)
-		pdf.CellFormat(180, 4, "Polygraph International HR Consultancy LLC | Office 401-41, Deyaar building, Al Barsha 1, Dubai, United Arab Emirates", "", 0, "C", false, 0, "")
+		pdf.CellFormat(180, 4, "Polygraph UAE | Office 401-41, Deyaar building, Al Barsha 1, Dubai, United Arab Emirates", "", 0, "C", false, 0, "")
 		pdf.Ln(4)
 		pdf.CellFormat(180, 4, "Website: www.polygraph.ae | Email: info@polygraph.ae", "", 0, "C", false, 0, "")
 
@@ -689,37 +690,36 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	pdf.SetTextColor(0, 0, 0)
 
 	// Page 1 Content
-	// EXAMINEE INFORMATION
+	// POLYGRAPH EXAM DETAILS
 	pdf.SetFont("Helvetica", "BU", 10)
-	pdf.Cell(0, 6, "EXAMINEE INFORMATION")
+	pdf.Cell(0, 6, "POLYGRAPH EXAM DETAILS")
 	pdf.Ln(7)
 
-	// Detail fields table/list
-	pdf.SetFont("Helvetica", "B", 9)
-	pdf.Cell(30, 6, "OUR REF")
-	pdf.SetFont("Helvetica", "", 9)
+	writeDetailRow := func(label, value string) {
+		pdf.SetFont("Helvetica", "B", 9)
+		pdf.Cell(38, 6, label)
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.Cell(0, 6, ": "+value)
+		pdf.Ln(6)
+	}
+
 	refNo := ""
+	examDate := ""
+	reportDate := ""
 	if isStructured {
 		refNo = reportData.ReferenceNo
-	}
-	pdf.Cell(0, 6, ": "+refNo)
-	pdf.Ln(6)
-
-	pdf.SetFont("Helvetica", "B", 9)
-	pdf.Cell(30, 6, "DATE")
-	pdf.SetFont("Helvetica", "", 9)
-	examDate := ""
-	if isStructured {
 		examDate = reportData.ExamDate
+		reportDate = strings.TrimSpace(reportData.ReportDate)
+		if reportDate == "" {
+			reportDate = examDate
+		}
 	}
-	pdf.Cell(0, 6, ": "+examDate)
-	pdf.Ln(6)
 
-	pdf.SetFont("Helvetica", "B", 9)
-	pdf.Cell(30, 6, "EXAMINEE")
-	pdf.SetFont("Helvetica", "", 9)
-	pdf.Cell(0, 6, ": "+subjectName)
-	pdf.Ln(10)
+	writeDetailRow("REF ID", refNo)
+	writeDetailRow("TEST DATE", examDate)
+	writeDetailRow("REPORT DATE", reportDate)
+	writeDetailRow("EXAMINEE", subjectName)
+	pdf.Ln(4)
 
 	if isStructured {
 		writeReportParagraph := func(text string, afterLn float64) {
