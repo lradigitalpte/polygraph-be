@@ -10,6 +10,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		me.PATCH("", ctrl.UpdateMe)
 		me.GET("/signature", ctrl.GetMySignature)
 		me.POST("/signature", ctrl.UploadMySignature)
+		me.PATCH("/signature", ctrl.UpdateMySignatureMeta)
 		me.DELETE("/signature", ctrl.DeleteMySignature)
 		me.DELETE("", ctrl.DeleteMe)
 	}

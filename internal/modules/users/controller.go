@@ -259,6 +259,33 @@ func (ctrl *Controller) UploadMySignature(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"has_signature": true, "title": user.SignatureTitle, "organization": user.SignatureOrganization})
 }
 
+func (ctrl *Controller) UpdateMySignatureMeta(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	var body struct {
+		Title        string `json:"title"`
+		Organization string `json:"organization"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title and organization are required"})
+		return
+	}
+
+	user, err := ctrl.service.UpdateSignatureMeta(userID, body.Title, body.Organization)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"has_signature": true,
+		"title":         user.SignatureTitle,
+		"organization":  user.SignatureOrganization,
+	})
+}
+
 func (ctrl *Controller) DeleteMySignature(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {

@@ -29,6 +29,31 @@ func (s *Service) SaveSignature(userID uint, imageData, title, organization stri
 	return s.GetByID(userID)
 }
 
+// UpdateSignatureMeta updates title/organization while keeping the existing signature image.
+func (s *Service) UpdateSignatureMeta(userID uint, title, organization string) (*auth.User, error) {
+	title = strings.TrimSpace(title)
+	organization = strings.TrimSpace(organization)
+	if title == "" || organization == "" {
+		return nil, errors.New("title and organization are required")
+	}
+
+	user, err := s.GetByID(userID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(user.SignatureImage) == "" {
+		return nil, errors.New("upload a signature image before saving title and organization")
+	}
+
+	if err := s.db.Model(&auth.User{}).Where("id = ?", userID).Updates(map[string]any{
+		"signature_title": title, "signature_organization": organization,
+	}).Error; err != nil {
+		return nil, err
+	}
+	s.invalidateUsersCache()
+	return s.GetByID(userID)
+}
+
 func (s *Service) DeleteSignature(userID uint) error {
 	if err := s.db.Model(&auth.User{}).Where("id = ?", userID).Updates(map[string]any{
 		"signature_image": "", "signature_title": "", "signature_organization": "",
