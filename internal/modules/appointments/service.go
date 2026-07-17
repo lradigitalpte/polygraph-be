@@ -520,7 +520,7 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 		if err != nil {
 			return nil, errors.New("scheduled_at must be an RFC3339 timestamp")
 		}
-		if parsed.UTC().Weekday() == time.Sunday {
+		if !s.sundayBookingsEnabled() && parsed.In(timeutil.ClinicLocation()).Weekday() == time.Sunday {
 			return nil, errors.New("appointments cannot be scheduled on Sunday")
 		}
 		newScheduledAt = parsed
@@ -922,7 +922,7 @@ func (s *Service) validateAppointment(app *Appointment) error {
 	}
 	// Past scheduled_at is allowed so staff can log exams that already happened
 	// (forgot to book, report generation, etc.). The booking UI surfaces a backdated notice.
-	if app.ScheduledAt.In(timeutil.ClinicLocation()).Weekday() == time.Sunday {
+	if !s.sundayBookingsEnabled() && app.ScheduledAt.In(timeutil.ClinicLocation()).Weekday() == time.Sunday {
 		return errors.New("appointments cannot be scheduled on Sunday")
 	}
 
@@ -971,6 +971,16 @@ func (s *Service) validateAppointment(app *Appointment) error {
 		app.PaymentStatus = "None"
 	}
 	return nil
+}
+
+func (s *Service) sundayBookingsEnabled() bool {
+	var config struct {
+		SundayBookingsEnabled bool `gorm:"column:sunday_bookings_enabled"`
+	}
+	if err := s.db.Table("organization_settings").Select("sunday_bookings_enabled").Where("id = ?", 1).Take(&config).Error; err != nil {
+		return false
+	}
+	return config.SundayBookingsEnabled
 }
 
 func (s *Service) hasAvailabilityConflict(examinerID uint, scheduledAt time.Time, duration int) (bool, error) {

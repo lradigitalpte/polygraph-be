@@ -26,13 +26,14 @@ type Service struct {
 }
 
 type UpdateOrganizationInput struct {
-	Name         string   `json:"name"`
-	SupportEmail string   `json:"support_email"`
-	Address      string   `json:"address"`
-	Currency     string   `json:"currency"`
-	UsdAedRate   *float64 `json:"usd_aed_rate"`
-	UsdGbpRate   *float64 `json:"usd_gbp_rate"`
-	UsdEurRate   *float64 `json:"usd_eur_rate"`
+	Name                  string   `json:"name"`
+	SupportEmail          string   `json:"support_email"`
+	Address               string   `json:"address"`
+	Currency              string   `json:"currency"`
+	UsdAedRate            *float64 `json:"usd_aed_rate"`
+	UsdGbpRate            *float64 `json:"usd_gbp_rate"`
+	UsdEurRate            *float64 `json:"usd_eur_rate"`
+	SundayBookingsEnabled *bool    `json:"sunday_bookings_enabled"`
 }
 
 func NewService() *Service {
@@ -93,6 +94,9 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 	if input.UsdEurRate != nil {
 		updates["usd_eur_rate"] = *input.UsdEurRate
 	}
+	if input.SundayBookingsEnabled != nil {
+		updates["sunday_bookings_enabled"] = *input.SundayBookingsEnabled
+	}
 	if err := s.db.Model(row).Updates(updates).Error; err != nil {
 		return nil, err
 	}
@@ -116,7 +120,7 @@ func (s *Service) DeleteOrganizationData() error {
 		for _, fk := range nullableFKs {
 			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).
 				Model(fk.model).
-				Where(fk.column + " IS NOT NULL").
+				Where(fk.column+" IS NOT NULL").
 				Update(fk.column, nil).Error; err != nil {
 				return err
 			}
