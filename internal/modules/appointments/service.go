@@ -34,6 +34,19 @@ func NewService(store storage.Storage) *Service {
 }
 
 func (s *Service) CreateClient(client *Client) error {
+	if client.EmailDeliveryMode == "" {
+		clientType := strings.ToLower(client.ClientType)
+		if strings.Contains(clientType, "corporate") || strings.Contains(clientType, "law") {
+			client.EmailDeliveryMode = "daily_summary"
+			client.EmailExamineeFallback = false
+		} else {
+			client.EmailDeliveryMode = "immediate"
+			client.EmailExamineeFallback = true
+		}
+		client.EmailBookingNotices = true
+		client.EmailSessionReminders = true
+		client.EmailSummaryTime = "17:00"
+	}
 	return s.db.Create(client).Error
 }
 
@@ -121,6 +134,19 @@ func (s *Service) UpdateClient(id string, input *Client) error {
 	if input.PreferredPaymentMethod == "" {
 		input.PreferredPaymentMethod = client.PreferredPaymentMethod
 	}
+	if input.EmailDeliveryMode == "" {
+		input.EmailDeliveryMode = client.EmailDeliveryMode
+	}
+	if input.EmailSummaryTime == "" {
+		input.EmailSummaryTime = client.EmailSummaryTime
+	}
+	validDeliveryMode := map[string]bool{"immediate": true, "daily_summary": true, "important_only": true, "none": true}
+	if !validDeliveryMode[input.EmailDeliveryMode] {
+		return errors.New("invalid email delivery mode")
+	}
+	if _, err := time.Parse("15:04", input.EmailSummaryTime); err != nil {
+		return errors.New("invalid email summary time")
+	}
 
 	updates := map[string]interface{}{
 		"name":                     input.Name,
@@ -132,6 +158,11 @@ func (s *Service) UpdateClient(id string, input *Client) error {
 		"address":                  strings.TrimSpace(input.Address),
 		"tax_id":                   strings.TrimSpace(input.TaxID),
 		"preferred_payment_method": input.PreferredPaymentMethod,
+		"email_delivery_mode":      input.EmailDeliveryMode,
+		"email_booking_notices":    input.EmailBookingNotices,
+		"email_session_reminders":  input.EmailSessionReminders,
+		"email_examinee_fallback":  input.EmailExamineeFallback,
+		"email_summary_time":       input.EmailSummaryTime,
 		"notes":                    strings.TrimSpace(input.Notes),
 	}
 
@@ -693,6 +724,9 @@ func (s *Service) EmailAppointmentConfirmation(apptID uint) error {
 	if err := s.db.Preload("Client").First(&appt, apptID).Error; err != nil {
 		return err
 	}
+	if !appt.Client.EmailBookingNotices || appt.Client.EmailDeliveryMode == "none" || appt.Client.EmailDeliveryMode == "important_only" {
+		return nil
+	}
 
 	// Prefer the examinee's own email; fall back to the client/organisation email.
 	var subj subjects.Subject
@@ -700,6 +734,9 @@ func (s *Service) EmailAppointmentConfirmation(apptID uint) error {
 	recipientName := strings.TrimSpace(subj.FirstName + " " + subj.LastName)
 	toEmail := strings.TrimSpace(subj.Email)
 	if toEmail == "" {
+		if appt.Client.EmailDeliveryMode != "immediate" || !appt.Client.EmailExamineeFallback {
+			return nil
+		}
 		toEmail = strings.TrimSpace(appt.Client.Email)
 		if recipientName == "" {
 			recipientName = appt.Client.Name
@@ -739,12 +776,18 @@ func (s *Service) EmailAppointmentReminder(apptID uint) error {
 	if err := s.db.Preload("Client").First(&appt, apptID).Error; err != nil {
 		return err
 	}
+	if !appt.Client.EmailSessionReminders || appt.Client.EmailDeliveryMode == "none" || appt.Client.EmailDeliveryMode == "important_only" {
+		return nil
+	}
 
 	var subj subjects.Subject
 	_ = s.db.First(&subj, appt.SubjectID).Error
 	recipientName := strings.TrimSpace(subj.FirstName + " " + subj.LastName)
 	toEmail := strings.TrimSpace(subj.Email)
 	if toEmail == "" {
+		if appt.Client.EmailDeliveryMode != "immediate" || !appt.Client.EmailExamineeFallback {
+			return nil
+		}
 		toEmail = strings.TrimSpace(appt.Client.Email)
 		if recipientName == "" {
 			recipientName = appt.Client.Name
@@ -807,6 +850,85 @@ func (s *Service) RunDueReminders(withinHours int) (int, error) {
 		stamp := time.Now().UTC()
 		if updErr := s.db.Model(&Appointment{}).Where("id = ?", appt.ID).
 			Update("reminded_at", &stamp).Error; updErr != nil {
+			continue
+		}
+		sent++
+	}
+	return sent, nil
+}
+
+// RunCorporateDailySummaries sends one consolidated operational email per opted-in
+// corporate client. It replaces per-examinee fallback messages when examinees do
+// not have their own email address.
+func (s *Service) RunCorporateDailySummaries() (int, error) {
+	var clients []Client
+	if err := s.db.Where("email_delivery_mode = ?", "daily_summary").Where("email <> ''").Find(&clients).Error; err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	dubai, _ := time.LoadLocation("Asia/Dubai")
+	if dubai == nil {
+		dubai = time.FixedZone("Dubai", 4*60*60)
+	}
+	localNow := now.In(dubai)
+	sent := 0
+	for _, client := range clients {
+		summaryTime := strings.TrimSpace(client.EmailSummaryTime)
+		if summaryTime == "" {
+			summaryTime = "17:00"
+		}
+		parts := strings.Split(summaryTime, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		hour, hourErr := strconv.Atoi(parts[0])
+		minute, minuteErr := strconv.Atoi(parts[1])
+		if hourErr != nil || minuteErr != nil || localNow.Hour() != hour || localNow.Minute() < minute || localNow.Minute() >= minute+60 {
+			continue
+		}
+		if client.LastEmailSummaryAt != nil {
+			last := client.LastEmailSummaryAt.In(dubai)
+			if last.Year() == localNow.Year() && last.YearDay() == localNow.YearDay() {
+				continue
+			}
+		}
+		since := now.Add(-24 * time.Hour)
+		if client.LastEmailSummaryAt != nil && client.LastEmailSummaryAt.After(since) {
+			since = *client.LastEmailSummaryAt
+		}
+		var appointments []Appointment
+		if err := s.db.Preload("Subject").Where("client_id = ?", client.ID).
+			Where("created_at >= ? OR updated_at >= ? OR (scheduled_at >= ? AND scheduled_at <= ?)", since, since, now, now.Add(7*24*time.Hour)).
+			Order("scheduled_at ASC").Find(&appointments).Error; err != nil {
+			continue
+		}
+		if len(appointments) == 0 {
+			_ = s.db.Model(&Client{}).Where("id = ?", client.ID).Update("last_email_summary_at", now).Error
+			continue
+		}
+		newBookings, completed, cancelled := 0, 0, 0
+		lines := make([]string, 0, len(appointments))
+		for _, appt := range appointments {
+			if !appt.CreatedAt.Before(since) {
+				newBookings++
+			}
+			switch strings.ToLower(appt.Status) {
+			case "completed":
+				completed++
+			case "cancelled", "canceled":
+				cancelled++
+			}
+			name := strings.TrimSpace(appt.Subject.FirstName + " " + appt.Subject.LastName)
+			if name == "" {
+				name = fmt.Sprintf("Examinee #%d", appt.SubjectID)
+			}
+			lines = append(lines, fmt.Sprintf("• %s — %s — %s", name, appt.ScheduledAt.Format("Mon, 2 Jan 2006 at 15:04"), strings.Title(appt.Status)))
+		}
+		body := fmt.Sprintf("Hello %s,\n\nHere is your consolidated Polygraph activity summary.\n\nNew bookings: %d\nCompleted: %d\nCancelled: %d\n\nSessions\n%s\n\nInvoices and reports are sent separately only when requested.\n\nThank you,\nPolygraph Forensic System", client.Name, newBookings, completed, cancelled, strings.Join(lines, "\n"))
+		if err := sendSMTPMail(client.Email, "Daily Polygraph activity summary", body); err != nil {
+			continue
+		}
+		if err := s.db.Model(&Client{}).Where("id = ?", client.ID).Update("last_email_summary_at", now).Error; err != nil {
 			continue
 		}
 		sent++

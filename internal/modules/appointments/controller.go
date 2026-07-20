@@ -380,10 +380,10 @@ func (ctrl *Controller) CreateAppointment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// Best-effort notifications. A mail failure must not fail the booking — the
-	// invoice can still be sent manually from billing.
+	// Best-effort appointment notification. The invoice record is created during
+	// booking, but invoice email delivery is deliberately manual from billing so
+	// corporate clients receive it only when requested.
 	_ = ctrl.service.EmailAppointmentConfirmation(appointment.ID)
-	_ = ctrl.service.EmailInvoiceForAppointment(appointment.ID)
 	c.JSON(http.StatusCreated, appointment)
 }
 
@@ -417,6 +417,25 @@ func (ctrl *Controller) RunDueReminders(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"sent": sent, "within_hours": withinHours})
+}
+
+func (ctrl *Controller) RunCorporateDailySummaries(c *gin.Context) {
+	secret := strings.TrimSpace(os.Getenv("CRON_SECRET"))
+	provided := strings.TrimSpace(c.GetHeader("X-Cron-Secret"))
+	if secret == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "CRON_SECRET is not configured"})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or missing cron secret"})
+		return
+	}
+	sent, err := ctrl.service.RunCorporateDailySummaries()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sent": sent})
 }
 
 // BulkSchedule creates subjects (if new) and one appointment each in a single transaction.

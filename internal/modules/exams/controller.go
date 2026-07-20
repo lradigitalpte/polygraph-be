@@ -453,6 +453,7 @@ func (ctrl *Controller) CreateSecureShare(c *gin.Context) {
 		ExamID         uint   `json:"exam_id"`
 		RecipientEmail string `json:"recipient_email"`
 		ExpiresInDays  int    `json:"expires_in_days"`
+		ProtectionMode string `json:"protection_mode"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -480,7 +481,7 @@ func (ctrl *Controller) CreateSecureShare(c *gin.Context) {
 		return
 	}
 
-	share, err := ctrl.service.CreateSecureShare(reportID, input.RecipientEmail, input.ExpiresInDays)
+	share, err := ctrl.service.CreateSecureShare(reportID, input.RecipientEmail, input.ExpiresInDays, input.ProtectionMode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -571,11 +572,12 @@ func (ctrl *Controller) RegenerateSecureShare(c *gin.Context) {
 	}
 
 	var input struct {
-		ExpiresInDays int `json:"expires_in_days"`
+		ExpiresInDays  int    `json:"expires_in_days"`
+		ProtectionMode string `json:"protection_mode"`
 	}
 	_ = c.ShouldBindJSON(&input)
 
-	share, err := ctrl.service.RegenerateSecureReportShare(uint(id), input.ExpiresInDays)
+	share, err := ctrl.service.RegenerateSecureReportShare(uint(id), input.ExpiresInDays, input.ProtectionMode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

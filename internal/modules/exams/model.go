@@ -162,6 +162,7 @@ type SecureReportShare struct {
 	RecipientEmail   string           `gorm:"size:255;not null" json:"recipient_email"`
 	Token            string           `gorm:"size:255;uniqueIndex;not null" json:"token"`
 	Password         string           `gorm:"size:100;not null" json:"password"`
+	ProtectionMode   string           `gorm:"size:30;default:'password';not null" json:"protection_mode"` // password, secure_link
 	PdfURL           string           `gorm:"size:500" json:"pdf_url"`
 	VerificationCode string           `gorm:"size:64;uniqueIndex" json:"verification_code"`
 	PDFHash          string           `gorm:"size:64" json:"-"`

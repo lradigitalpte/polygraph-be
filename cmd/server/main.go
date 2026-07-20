@@ -271,6 +271,7 @@ func main() {
 	// the handler). Hit on a schedule by an external scheduler (cron-job.org) to
 	// send pre-session reminder emails.
 	r.POST("/api/cron/run-reminders", appCtrl.RunDueReminders)
+	r.POST("/api/cron/run-corporate-summaries", appCtrl.RunCorporateDailySummaries)
 
 	// API Routes
 	api := r.Group("/api")

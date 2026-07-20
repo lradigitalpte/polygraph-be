@@ -168,7 +168,6 @@ func (s *Service) CreateReport(examID uint, verdict, content string) (*ExamRepor
 		return nil, err
 	}
 
-	s.db.Model(&Exam{}).Where("id = ?", examID).Update("status", "completed")
 	return &report, nil
 }
 
@@ -436,6 +435,7 @@ type appointmentLink struct {
 	ExaminerID  uint
 	ScheduledAt time.Time
 	ExamID      *uint
+	Status      string
 	Notes       string `gorm:"type:text"`
 }
 
@@ -485,6 +485,14 @@ func (s *Service) GetExamByAppointmentID(appointmentID string) (*Exam, error) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	// Repair legacy records created before report completion synchronized the
+	// appointment. This is idempotent and only promotes a booking when its exam is
+	// already authoritative as completed.
+	if exam.Status == "completed" {
+		if err := s.db.Model(&appointmentLink{}).Where("id = ? AND status <> ?", appointmentID, "completed").Update("status", "completed").Error; err != nil {
+			return nil, err
+		}
 	}
 	s.signExamDocuments(&exam)
 	return &exam, nil
@@ -615,7 +623,9 @@ func decodedDataImage(dataURI string) ([]byte, string, error) {
 func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string, verificationCode string, verificationURL string, signer *PDFSigner) ([]byte, error) {
 	subjectName = strings.ToUpper(strings.TrimSpace(subjectName))
 	pdf := gofpdf.New("P", "mm", "A4", "")
-	pdf.SetProtection(gofpdf.CnProtectPrint, password, password)
+	if password != "" {
+		pdf.SetProtection(gofpdf.CnProtectPrint, password, password)
+	}
 	if verificationURL != "" {
 		if qrPNG, err := qrcode.Encode(verificationURL, qrcode.Medium, 256); err == nil {
 			pdf.RegisterImageOptionsReader("verification-qr", gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(qrPNG))
@@ -964,24 +974,30 @@ func (s *Service) GetConsolidatedReportStats(examinerID uint) (map[string]any, e
 	var totalInconclusive int64
 
 	sharesQuery := s.db.Model(&SecureReportShare{})
-	reportsQuery := s.db.Model(&ExamReport{})
 	if examinerID > 0 {
 		sharesQuery = sharesQuery.Joins("JOIN exam_reports ON exam_reports.id = secure_report_shares.exam_report_id").Joins("JOIN exams ON exams.id = exam_reports.exam_id").Where("exams.examiner_id = ?", examinerID)
-		reportsQuery = reportsQuery.Joins("JOIN exams ON exams.id = exam_reports.exam_id").Where("exams.examiner_id = ?", examinerID)
 	}
 
 	if err := sharesQuery.Count(&totalShares).Error; err != nil {
 		return nil, err
 	}
 
-	// Count report verdicts
-	if err := reportsQuery.Where("verdict = ?", "NDI").Count(&totalNDI).Error; err != nil {
+	// Start each count from a fresh query. GORM chain methods mutate a statement,
+	// so reusing one query can accidentally produce `verdict = NDI AND verdict = DI`.
+	finalizedReports := func() *gorm.DB {
+		query := s.db.Model(&ExamReport{}).Where("exam_reports.is_locked = ?", true)
+		if examinerID > 0 {
+			query = query.Joins("JOIN exams ON exams.id = exam_reports.exam_id").Where("exams.examiner_id = ?", examinerID)
+		}
+		return query
+	}
+	if err := finalizedReports().Where("verdict = ?", "NDI").Count(&totalNDI).Error; err != nil {
 		return nil, err
 	}
-	if err := reportsQuery.Where("verdict = ?", "DI").Count(&totalDI).Error; err != nil {
+	if err := finalizedReports().Where("verdict = ?", "DI").Count(&totalDI).Error; err != nil {
 		return nil, err
 	}
-	if err := reportsQuery.Where("verdict = ? OR verdict = ?", "Inconclusive", "INCONCLUSIVE").Count(&totalInconclusive).Error; err != nil {
+	if err := finalizedReports().Where("verdict = ? OR verdict = ?", "Inconclusive", "INCONCLUSIVE").Count(&totalInconclusive).Error; err != nil {
 		return nil, err
 	}
 
@@ -1018,7 +1034,26 @@ func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint,
 	return shares, err
 }
 
-func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiryDays int) (*SecureReportShare, error) {
+func normalizeProtectionMode(mode string) (string, error) {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		mode = "password"
+	}
+	if mode != "password" && mode != "secure_link" {
+		return "", errors.New("protection_mode must be password or secure_link")
+	}
+	return mode, nil
+}
+
+func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiryDays int, requestedMode ...string) (*SecureReportShare, error) {
+	mode := "password"
+	if len(requestedMode) > 0 {
+		mode = requestedMode[0]
+	}
+	mode, err := normalizeProtectionMode(mode)
+	if err != nil {
+		return nil, err
+	}
 	// Fetch report
 	var report ExamReport
 	if err := s.db.First(&report, reportID).Error; err != nil {
@@ -1051,7 +1086,10 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 	}
 
 	// Generate passcode & token
-	passcode := generatePasscode()
+	passcode := ""
+	if mode == "password" {
+		passcode = generatePasscode()
+	}
 	token := generateToken()
 	verificationCode := generateVerificationCode()
 	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
@@ -1095,6 +1133,7 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 		RecipientEmail:   recipientEmail,
 		Token:            token,
 		Password:         passcode,
+		ProtectionMode:   mode,
 		PdfURL:           pdfURL,
 		VerificationCode: verificationCode,
 		PDFHash:          pdfSHA256(pdfBytes),
@@ -1110,15 +1149,13 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 	secureLink := fmt.Sprintf("%s/shared/report/%s", strings.TrimSuffix(frontendURL, "/"), token)
 
 	subjectLine := fmt.Sprintf("CONFIDENTIAL: Polygraph Report for %s", subjectName)
-	emailBody := fmt.Sprintf(
-		"Hello,\n\nYour polygraph forensic report for %s is attached to this email as a password-protected PDF.\n\nTo view the password and securely unlock this document, please click the link below:\n%s\n\nFor security reasons, this link will expire in %s.\n\nBest regards,\nPolygraph Forensic System Team",
-		subjectName,
-		secureLink,
-		shareExpiryMessage(expiryDays),
-	)
-
-	// Send it!
-	_ = email.SendWithAttachment(recipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+	if mode == "password" {
+		emailBody := fmt.Sprintf("Hello,\n\nYour polygraph forensic report for %s is attached as a password-protected PDF.\n\nReveal the passcode through this secure link:\n%s\n\nThe link expires in %s.\n\nBest regards,\nPolygraph Forensic System Team", subjectName, secureLink, shareExpiryMessage(expiryDays))
+		_ = email.SendWithAttachment(recipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+	} else {
+		emailBody := fmt.Sprintf("Hello,\n\nYour polygraph forensic report for %s is attached as a PDF that does not require an opening password. You can also verify and download it through this secure link:\n%s\n\nThe link expires in %s. The attached PDF remains accessible after the link expires.\n\nBest regards,\nPolygraph Forensic System Team", subjectName, secureLink, shareExpiryMessage(expiryDays))
+		_ = email.SendWithAttachment(recipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+	}
 
 	return &share, nil
 }
@@ -1141,7 +1178,7 @@ func (s *Service) GetReportVerification(code string) (*SecureReportShare, error)
 	return &share, err
 }
 
-func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureReportShare, error) {
+func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int, requestedMode ...string) (*SecureReportShare, error) {
 	var share SecureReportShare
 	if err := s.db.Preload("Subject").Preload("ExamReport").First(&share, id).Error; err != nil {
 		return nil, err
@@ -1167,8 +1204,19 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 		clientName = cTemp.Name
 	}
 
+	mode := share.ProtectionMode
+	if len(requestedMode) > 0 && strings.TrimSpace(requestedMode[0]) != "" {
+		mode = requestedMode[0]
+	}
+	mode, err = normalizeProtectionMode(mode)
+	if err != nil {
+		return nil, err
+	}
 	// Rotate passcode & token
-	passcode := generatePasscode()
+	passcode := ""
+	if mode == "password" {
+		passcode = generatePasscode()
+	}
 	token := generateToken()
 	verificationCode := generateVerificationCode()
 	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
@@ -1208,6 +1256,7 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 	updates := map[string]any{
 		"token":             token,
 		"password":          passcode,
+		"protection_mode":   mode,
 		"pdf_url":           pdfURL,
 		"verification_code": verificationCode,
 		"pdf_hash":          pdfSHA256(pdfBytes),
@@ -1231,13 +1280,13 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int) (*SecureR
 	secureLink := fmt.Sprintf("%s/shared/report/%s", strings.TrimSuffix(frontendURL, "/"), token)
 
 	subjectLine := fmt.Sprintf("CONFIDENTIAL (UPDATED): Polygraph Report for %s", subjectName)
-	emailBody := fmt.Sprintf(
-		"Hello,\n\nYour polygraph forensic report link has been regenerated. The report is attached to this email as a password-protected PDF.\n\nTo view the new password and unlock the document, please click the secure link below:\n%s\n\nFor security reasons, this link will expire in %s.\n\nBest regards,\nPolygraph Forensic System Team",
-		secureLink,
-		shareExpiryMessage(expiryDays),
-	)
-
-	_ = email.SendWithAttachment(share.RecipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+	if mode == "password" {
+		emailBody := fmt.Sprintf("Hello,\n\nYour updated password-protected report is attached. Reveal the new passcode here:\n%s\n\nThe link expires in %s.\n\nBest regards,\nPolygraph Forensic System Team", secureLink, shareExpiryMessage(expiryDays))
+		_ = email.SendWithAttachment(share.RecipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+	} else {
+		emailBody := fmt.Sprintf("Hello,\n\nYour updated report is attached as a PDF that does not require an opening password. You can also verify and download it through this secure link:\n%s\n\nThe link expires in %s. The attached PDF remains accessible after the link expires.\n\nBest regards,\nPolygraph Forensic System Team", secureLink, shareExpiryMessage(expiryDays))
+		_ = email.SendWithAttachment(share.RecipientEmail, subjectLine, emailBody, fmt.Sprintf("Forensic_Report_%s.pdf", exam.Subject.LastName), pdfBytes)
+	}
 
 	return &share, nil
 }

@@ -94,6 +94,29 @@ func TestService_CreateClient(t *testing.T) {
 	assert.Equal(t, "test@example.com", found.Email)
 }
 
+func TestService_UpdateClientEmailPreferences(t *testing.T) {
+	db := setupTestDB(t)
+	s := &Service{db: db}
+	client := Client{Name: "Corporate Client", ClientType: "Corporate", Email: "corp@example.com"}
+	require.NoError(t, db.Create(&client).Error)
+
+	input := client
+	input.EmailDeliveryMode = "daily_summary"
+	input.EmailBookingNotices = true
+	input.EmailSessionReminders = false
+	input.EmailExamineeFallback = false
+	input.EmailSummaryTime = "17:00"
+	require.NoError(t, s.UpdateClient(strconv.Itoa(int(client.ID)), &input))
+
+	var updated Client
+	require.NoError(t, db.First(&updated, client.ID).Error)
+	assert.Equal(t, "daily_summary", updated.EmailDeliveryMode)
+	assert.True(t, updated.EmailBookingNotices)
+	assert.False(t, updated.EmailSessionReminders)
+	assert.False(t, updated.EmailExamineeFallback)
+	assert.Equal(t, "17:00", updated.EmailSummaryTime)
+}
+
 func TestService_GetAllClients(t *testing.T) {
 	db := setupTestDB(t)
 	s := &Service{db: db}

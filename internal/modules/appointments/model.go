@@ -23,31 +23,37 @@ type Client struct {
 	Address                string         `gorm:"type:text" json:"address"`
 	TaxID                  string         `gorm:"size:100" json:"tax_id,omitempty"` // VAT or Company Reg Number
 	PreferredPaymentMethod string         `gorm:"size:50;default:'Bank Transfer'" json:"preferred_payment_method"`
+	EmailDeliveryMode      string         `gorm:"size:30;default:'immediate'" json:"email_delivery_mode"` // immediate, daily_summary, important_only, none
+	EmailBookingNotices    bool           `gorm:"default:true" json:"email_booking_notices"`
+	EmailSessionReminders  bool           `gorm:"default:true" json:"email_session_reminders"`
+	EmailExamineeFallback  bool           `gorm:"default:false" json:"email_examinee_fallback"`
+	EmailSummaryTime       string         `gorm:"size:5;default:'17:00'" json:"email_summary_time"`
+	LastEmailSummaryAt     *time.Time     `json:"last_email_summary_at,omitempty"`
 	Notes                  string         `gorm:"type:text" json:"notes"`
 }
 
 // Appointment represents a scheduled polygraph session
 type Appointment struct {
-	ID                uint           `gorm:"primarykey" json:"id"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
-	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
-	ClientID          uint           `json:"client_id"`
-	Client            Client         `gorm:"foreignKey:ClientID" json:"client,omitempty"`
-	SubjectID         uint           `json:"subject_id"`
+	ID                uint             `gorm:"primarykey" json:"id"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	DeletedAt         gorm.DeletedAt   `gorm:"index" json:"-"`
+	ClientID          uint             `json:"client_id"`
+	Client            Client           `gorm:"foreignKey:ClientID" json:"client,omitempty"`
+	SubjectID         uint             `json:"subject_id"`
 	Subject           subjects.Subject `gorm:"foreignKey:SubjectID" json:"subject,omitempty"`
-	ExaminerID        uint           `json:"examiner_id"`
-	ScheduledAt       time.Time      `json:"scheduled_at"`
-	Duration          int            `json:"duration"` // In minutes
-	ExamFee           float64        `gorm:"type:numeric(10,2);default:0" json:"exam_fee"`
-	FeeCurrency       string         `gorm:"size:10;default:'USD'" json:"fee_currency"` // USD catalog input; normalized rows use org currency
-	CollectedAmount   float64        `gorm:"type:numeric(10,2);default:0" json:"collected_amount"`
-	Status            string         `gorm:"size:50;default:'pending'" json:"status"`        // pending, confirmed, cancelled, completed
-	PaymentStatus     string         `gorm:"size:50;default:'Unpaid'" json:"payment_status"` // Paid, Partial, Unpaid
-	PaymentMode       string         `gorm:"size:50" json:"payment_mode"`                    // Card, Bank Transfer, Cash
-	QuestionsPrepared bool           `gorm:"default:false" json:"questions_prepared"`
-	Notes             string         `gorm:"type:text" json:"notes"`
-	ExamID            *uint          `json:"exam_id,omitempty"`
+	ExaminerID        uint             `json:"examiner_id"`
+	ScheduledAt       time.Time        `json:"scheduled_at"`
+	Duration          int              `json:"duration"` // In minutes
+	ExamFee           float64          `gorm:"type:numeric(10,2);default:0" json:"exam_fee"`
+	FeeCurrency       string           `gorm:"size:10;default:'USD'" json:"fee_currency"` // USD catalog input; normalized rows use org currency
+	CollectedAmount   float64          `gorm:"type:numeric(10,2);default:0" json:"collected_amount"`
+	Status            string           `gorm:"size:50;default:'pending'" json:"status"`        // pending, confirmed, cancelled, completed
+	PaymentStatus     string           `gorm:"size:50;default:'Unpaid'" json:"payment_status"` // Paid, Partial, Unpaid
+	PaymentMode       string           `gorm:"size:50" json:"payment_mode"`                    // Card, Bank Transfer, Cash
+	QuestionsPrepared bool             `gorm:"default:false" json:"questions_prepared"`
+	Notes             string           `gorm:"type:text" json:"notes"`
+	ExamID            *uint            `json:"exam_id,omitempty"`
 	// RemindedAt is set when the automated pre-session reminder email is sent,
 	// so the cron job never reminds the same appointment twice.
 	RemindedAt *time.Time `json:"reminded_at,omitempty"`
