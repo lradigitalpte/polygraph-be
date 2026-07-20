@@ -33,6 +33,7 @@ go.work.sum
 # Build output
 /dist/
 /build/
+/.go-cache/
 
 # SQLite database files
 *.db

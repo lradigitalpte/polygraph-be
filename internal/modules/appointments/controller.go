@@ -522,7 +522,13 @@ func (ctrl *Controller) BulkImportHistorical(c *gin.Context) {
 // @Success 200 {array} Appointment
 // @Router /api/appointments [get]
 func (ctrl *Controller) GetAppointments(c *gin.Context) {
-	appointments, err := ctrl.service.GetAllAppointments(c.Query("client_id"))
+	var appointments []Appointment
+	var err error
+	if examinerID, restricted := restrictToExaminer(c); restricted {
+		appointments, err = ctrl.service.GetAppointmentsForExaminer(examinerID, c.Query("client_id"))
+	} else {
+		appointments, err = ctrl.service.GetAllAppointments(c.Query("client_id"))
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch appointments"})
 		return

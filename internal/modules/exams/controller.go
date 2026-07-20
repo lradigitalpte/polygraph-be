@@ -433,7 +433,13 @@ func (ctrl *Controller) ListSecureShares(c *gin.Context) {
 		}
 	}
 
-	shares, err := ctrl.service.ListSecureShares(search, clientID, subjectID)
+	var examinerID uint
+	if !middleware.HasPermission(c, "client:manage") {
+		if uid, ok := c.Get("user_id"); ok {
+			examinerID, _ = uid.(uint)
+		}
+	}
+	shares, err := ctrl.service.ListSecureShares(search, clientID, subjectID, examinerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch secure shares"})
 		return
@@ -579,7 +585,15 @@ func (ctrl *Controller) RegenerateSecureShare(c *gin.Context) {
 }
 
 func (ctrl *Controller) GetConsolidatedStats(c *gin.Context) {
-	stats, err := ctrl.service.GetConsolidatedReportStats()
+	var examinerID uint
+	if middleware.HasPermission(c, "client:manage") {
+		if requested, err := strconv.ParseUint(c.Query("examiner_id"), 10, 64); err == nil {
+			examinerID = uint(requested)
+		}
+	} else if uid, ok := c.Get("user_id"); ok {
+		examinerID, _ = uid.(uint)
+	}
+	stats, err := ctrl.service.GetConsolidatedReportStats(examinerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch stats"})
 		return

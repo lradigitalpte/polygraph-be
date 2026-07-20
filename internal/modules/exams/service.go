@@ -956,25 +956,31 @@ func shareExpiryMessage(days int) string {
 	return fmt.Sprintf("%d days", days)
 }
 
-func (s *Service) GetConsolidatedReportStats() (map[string]any, error) {
+func (s *Service) GetConsolidatedReportStats(examinerID uint) (map[string]any, error) {
 	var totalShares int64
 	var totalNDI int64
 	var totalDI int64
 	var totalInconclusive int64
 
-	// Count shares
-	if err := s.db.Model(&SecureReportShare{}).Count(&totalShares).Error; err != nil {
+	sharesQuery := s.db.Model(&SecureReportShare{})
+	reportsQuery := s.db.Model(&ExamReport{})
+	if examinerID > 0 {
+		sharesQuery = sharesQuery.Joins("JOIN exam_reports ON exam_reports.id = secure_report_shares.exam_report_id").Joins("JOIN exams ON exams.id = exam_reports.exam_id").Where("exams.examiner_id = ?", examinerID)
+		reportsQuery = reportsQuery.Joins("JOIN exams ON exams.id = exam_reports.exam_id").Where("exams.examiner_id = ?", examinerID)
+	}
+
+	if err := sharesQuery.Count(&totalShares).Error; err != nil {
 		return nil, err
 	}
 
 	// Count report verdicts
-	if err := s.db.Model(&ExamReport{}).Where("verdict = ?", "NDI").Count(&totalNDI).Error; err != nil {
+	if err := reportsQuery.Where("verdict = ?", "NDI").Count(&totalNDI).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&ExamReport{}).Where("verdict = ?", "DI").Count(&totalDI).Error; err != nil {
+	if err := reportsQuery.Where("verdict = ?", "DI").Count(&totalDI).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&ExamReport{}).Where("verdict = ? OR verdict = ?", "Inconclusive", "INCONCLUSIVE").Count(&totalInconclusive).Error; err != nil {
+	if err := reportsQuery.Where("verdict = ? OR verdict = ?", "Inconclusive", "INCONCLUSIVE").Count(&totalInconclusive).Error; err != nil {
 		return nil, err
 	}
 
@@ -986,9 +992,12 @@ func (s *Service) GetConsolidatedReportStats() (map[string]any, error) {
 	}, nil
 }
 
-func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint) ([]SecureReportShare, error) {
+func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint, examinerID uint) ([]SecureReportShare, error) {
 	var shares []SecureReportShare
 	query := s.db.Preload("Subject").Preload("ExamReport")
+	if examinerID > 0 {
+		query = query.Joins("JOIN exam_reports ON exam_reports.id = secure_report_shares.exam_report_id").Joins("JOIN exams ON exams.id = exam_reports.exam_id").Where("exams.examiner_id = ?", examinerID)
+	}
 
 	if clientID > 0 {
 		query = query.Where("client_id = ?", clientID)

@@ -159,6 +159,15 @@ func (s *Service) GetAllAppointments(clientID ...string) ([]Appointment, error) 
 	return appointments, err
 }
 
+func (s *Service) GetAppointmentsForExaminer(examinerID uint, clientID ...string) ([]Appointment, error) {
+	var appointments []Appointment
+	query := s.db.Preload("Client").Preload("Subject").Where("examiner_id = ?", examinerID).Order("scheduled_at DESC")
+	if len(clientID) > 0 && strings.TrimSpace(clientID[0]) != "" {
+		query = query.Where("client_id = ?", strings.TrimSpace(clientID[0]))
+	}
+	return appointments, query.Find(&appointments).Error
+}
+
 func (s *Service) GetClientDocuments(clientID string) ([]ClientDocument, error) {
 	var docs []ClientDocument
 	err := s.db.Where("client_id = ?", clientID).Order("created_at DESC").Find(&docs).Error
