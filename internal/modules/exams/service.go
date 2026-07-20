@@ -697,9 +697,10 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 
 	writeDetailRow := func(label, value string) {
 		pdf.SetFont("Helvetica", "B", 9)
-		pdf.Cell(38, 6, label)
+		pdf.Cell(34, 6, label)
+		pdf.Cell(4, 6, ":")
 		pdf.SetFont("Helvetica", "", 9)
-		pdf.Cell(0, 6, ": "+value)
+		pdf.Cell(0, 6, value)
 		pdf.Ln(6)
 	}
 
