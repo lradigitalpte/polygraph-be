@@ -34,6 +34,8 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		r.POST("/shares", permissionMiddleware("exam:view"), ctrl.CreateSecureShare)
 		r.GET("/shares", permissionMiddleware("exam:view"), ctrl.ListSecureShares)
 		r.POST("/shares/:id/regenerate", permissionMiddleware("exam:view"), ctrl.RegenerateSecureShare)
+		r.POST("/shares/:id/archive", permissionMiddleware("exam:view"), ctrl.ArchiveSecureShare)
+		r.POST("/shares/:id/restore", permissionMiddleware("exam:view"), ctrl.RestoreSecureShare)
 		r.GET("/stats", permissionMiddleware("exam:view"), ctrl.GetConsolidatedStats)
 	}
 }

@@ -1009,9 +1009,18 @@ func (s *Service) GetConsolidatedReportStats(examinerID uint) (map[string]any, e
 	}, nil
 }
 
-func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint, examinerID uint) ([]SecureReportShare, error) {
+func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint, examinerID uint, archiveView ...string) ([]SecureReportShare, error) {
 	var shares []SecureReportShare
 	query := s.db.Preload("Subject").Preload("ExamReport")
+	view := "active"
+	if len(archiveView) > 0 {
+		view = strings.ToLower(strings.TrimSpace(archiveView[0]))
+	}
+	if view == "archived" {
+		query = query.Where("secure_report_shares.archived_at IS NOT NULL")
+	} else if view != "all" {
+		query = query.Where("secure_report_shares.archived_at IS NULL")
+	}
 	if examinerID > 0 {
 		query = query.Joins("JOIN exam_reports ON exam_reports.id = secure_report_shares.exam_report_id").Joins("JOIN exams ON exams.id = exam_reports.exam_id").Where("exams.examiner_id = ?", examinerID)
 	}
@@ -1032,6 +1041,29 @@ func (s *Service) ListSecureShares(search string, clientID uint, subjectID uint,
 
 	err := query.Order("created_at DESC").Find(&shares).Error
 	return shares, err
+}
+
+func (s *Service) SetSecureReportShareArchived(id uint, archived bool, examinerID uint) (*SecureReportShare, error) {
+	var share SecureReportShare
+	query := s.db.Preload("Subject").Preload("ExamReport").Where("secure_report_shares.id = ?", id)
+	if examinerID > 0 {
+		query = query.Joins("JOIN exam_reports ON exam_reports.id = secure_report_shares.exam_report_id").
+			Joins("JOIN exams ON exams.id = exam_reports.exam_id").
+			Where("exams.examiner_id = ?", examinerID)
+	}
+	if err := query.First(&share).Error; err != nil {
+		return nil, err
+	}
+	if archived {
+		now := time.Now()
+		share.ArchivedAt = &now
+	} else {
+		share.ArchivedAt = nil
+	}
+	if err := s.db.Model(&share).Update("archived_at", share.ArchivedAt).Error; err != nil {
+		return nil, err
+	}
+	return &share, nil
 }
 
 func normalizeProtectionMode(mode string) (string, error) {

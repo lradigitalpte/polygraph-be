@@ -414,6 +414,7 @@ func (ctrl *Controller) StartDocumentation(c *gin.Context) {
 
 func (ctrl *Controller) ListSecureShares(c *gin.Context) {
 	search := c.Query("search")
+	archiveView := c.DefaultQuery("archive", "active")
 	clientIDStr := c.Query("client_id")
 	subjectIDStr := c.Query("subject_id")
 
@@ -439,13 +440,36 @@ func (ctrl *Controller) ListSecureShares(c *gin.Context) {
 			examinerID, _ = uid.(uint)
 		}
 	}
-	shares, err := ctrl.service.ListSecureShares(search, clientID, subjectID, examinerID)
+	shares, err := ctrl.service.ListSecureShares(search, clientID, subjectID, examinerID, archiveView)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch secure shares"})
 		return
 	}
 	c.JSON(http.StatusOK, shares)
 }
+
+func (ctrl *Controller) setSecureShareArchived(c *gin.Context, archived bool) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid share ID"})
+		return
+	}
+	var examinerID uint
+	if !middleware.HasPermission(c, "client:manage") {
+		if uid, ok := c.Get("user_id"); ok {
+			examinerID, _ = uid.(uint)
+		}
+	}
+	share, err := ctrl.service.SetSecureReportShareArchived(uint(id), archived, examinerID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Report delivery not found"})
+		return
+	}
+	c.JSON(http.StatusOK, share)
+}
+
+func (ctrl *Controller) ArchiveSecureShare(c *gin.Context) { ctrl.setSecureShareArchived(c, true) }
+func (ctrl *Controller) RestoreSecureShare(c *gin.Context) { ctrl.setSecureShareArchived(c, false) }
 
 func (ctrl *Controller) CreateSecureShare(c *gin.Context) {
 	var input struct {

@@ -168,4 +168,5 @@ type SecureReportShare struct {
 	PDFHash          string           `gorm:"size:64" json:"-"`
 	Status           string           `gorm:"size:50;default:'sent'" json:"status"` // sent, viewed
 	ExpiresAt        time.Time        `json:"expires_at"`
+	ArchivedAt       *time.Time       `gorm:"index" json:"archived_at,omitempty"`
 }
