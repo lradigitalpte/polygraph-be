@@ -241,8 +241,24 @@ func (s *Service) UnlockReportForRevision(examID uint, actorID uint, reason stri
 	return &unlocked, nil
 }
 
+type FinalizeReportOptions struct {
+	SignerDisplayName  string
+	SignerCaptionLines string
+}
+
+func joinSignerCaption(title, organization string) string {
+	lines := make([]string, 0, 2)
+	if t := strings.TrimSpace(title); t != "" {
+		lines = append(lines, t)
+	}
+	if o := strings.TrimSpace(organization); o != "" {
+		lines = append(lines, o)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // FinalizeReport marks a written report as immutable after examiner sign-off.
-func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string, examinerID uint) (*ExamReport, error) {
+func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string, examinerID uint, opts *FinalizeReportOptions) (*ExamReport, error) {
 	var report ExamReport
 	if err := s.db.Where("exam_id = ?", examID).First(&report).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -266,8 +282,25 @@ func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string, e
 	if !strings.EqualFold(examiner.Role.Name, "Examiner") || !strings.EqualFold(examiner.Status, "active") {
 		return nil, fmt.Errorf("selected user is not an active examiner")
 	}
-	if examiner.SignatureImage == "" || examiner.SignatureTitle == "" || examiner.SignatureOrganization == "" {
-		return nil, fmt.Errorf("selected examiner has not configured their signature")
+	if examiner.SignatureImage == "" {
+		return nil, fmt.Errorf("selected examiner has not uploaded a signature image")
+	}
+
+	displayName := strings.TrimSpace(examiner.Name)
+	caption := joinSignerCaption(examiner.SignatureTitle, examiner.SignatureOrganization)
+	if opts != nil {
+		if v := strings.TrimSpace(opts.SignerDisplayName); v != "" {
+			displayName = v
+		}
+		if v := strings.TrimSpace(opts.SignerCaptionLines); v != "" {
+			caption = v
+		}
+	}
+	if displayName == "" {
+		return nil, fmt.Errorf("signer display name is required")
+	}
+	if caption == "" {
+		return nil, fmt.Errorf("add at least one line below the signature (title, credentials, or organization)")
 	}
 
 	now := time.Now()
@@ -292,9 +325,10 @@ func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string, e
 				"signature_examiner":  signature,
 				"signature_image":     examiner.SignatureImage,
 				"signer_examiner_id":  examiner.ID,
-				"signer_name":         examiner.Name,
+				"signer_name":         displayName,
 				"signer_title":        examiner.SignatureTitle,
 				"signer_organization": examiner.SignatureOrganization,
+				"signer_caption":      caption,
 				"signed_at":           &now,
 			}).Error; err != nil {
 			return err
@@ -582,30 +616,40 @@ func (s *Service) StartDocumentationForAppointment(appointmentID string) (*Exam,
 	return s.GetExamByID(strconv.FormatUint(uint64(exam.ID), 10))
 }
 
+type StructuredReportQuestion struct {
+	Text       string `json:"text"`
+	Answer     string `json:"answer"`
+	Evaluation string `json:"evaluation"`
+}
+
 type StructuredReport struct {
-	Purpose      string `json:"purpose"`
-	Instrument   string `json:"instrument"`
-	PreTestNotes string `json:"pre_test_notes"`
-	Questions    []struct {
-		Text       string `json:"text"`
-		Answer     string `json:"answer"`
-		Evaluation string `json:"evaluation"`
-	} `json:"questions"`
-	PostTestNotes    string `json:"post_test_notes"`
-	Conclusion       string `json:"conclusion,omitempty"` // legacy; not rendered in PDF
-	ReferenceNo      string `json:"reference_no"`
-	ExamDate         string `json:"exam_date"`
-	ReportDate       string `json:"report_date"`
-	Section4FollowUp string `json:"section_4_follow_up"`
-	LimeToneNotes    string `json:"limestone_notes"`
-	PreTestPhaseText string `json:"pre_test_phase_text"`
-	ExamPhaseText    string `json:"exam_phase_text"`
-	OpinionPhaseText string `json:"opinion_phase_text"`
+	Purpose                    string `json:"purpose"`
+	Instrument                 string `json:"instrument"`
+	PreTestNotes               string `json:"pre_test_notes"`
+	Questions                  []StructuredReportQuestion `json:"questions"`
+	PostTestNotes              string `json:"post_test_notes"`
+	Conclusion                 string `json:"conclusion,omitempty"` // legacy; not rendered in PDF
+	ReferenceNo                string `json:"reference_no"`
+	ExamDate                   string `json:"exam_date"`
+	ReportDate                 string `json:"report_date"`
+	Section4FollowUp           string `json:"section_4_follow_up"`
+	LimeToneNotes              string `json:"limestone_notes"`
+	PreTestPhaseText           string `json:"pre_test_phase_text"`
+	ExamPhaseText              string `json:"exam_phase_text"`
+	OpinionPhaseText           string `json:"opinion_phase_text"`
+	IdentityDocumentType       string `json:"identity_document_type,omitempty"`
+	IdentityVerificationText   string `json:"identity_verification_text,omitempty"`
+	ExamStartTime              string `json:"exam_start_time,omitempty"`
+	ExamEndTime                string `json:"exam_end_time,omitempty"`
+	CooperationMode            string `json:"cooperation_mode,omitempty"`
+	PreExamQuestionCountText   string `json:"pre_exam_question_count_text,omitempty"`
+	ResponseLegendText         string `json:"response_legend_text,omitempty"`
+	SourceTemplateID           uint   `json:"source_template_id,omitempty"`
 }
 
 type PDFSigner struct {
-	Name, Title, Organization, ImageData string
-	SignedAt                             *time.Time
+	Name, Title, Organization, Caption, ImageData string
+	SignedAt                                      *time.Time
 }
 
 func decodedDataImage(dataURI string) ([]byte, string, error) {
@@ -620,7 +664,45 @@ func decodedDataImage(dataURI string) ([]byte, string, error) {
 	return data, "PNG", nil
 }
 
-func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string, verificationCode string, verificationURL string, signer *PDFSigner) ([]byte, error) {
+func normalizeVerdictWording(wording string) string {
+	if strings.EqualFold(strings.TrimSpace(wording), "forensic") {
+		return "forensic"
+	}
+	return "plain"
+}
+
+func FormatVerdictLabel(verdict, wording string) string {
+	switch verdict {
+	case "DI":
+		if normalizeVerdictWording(wording) == "forensic" {
+			return "DECEPTION INDICATED (DI)"
+		}
+		return "NOT TRUTHFUL"
+	case "NDI":
+		if normalizeVerdictWording(wording) == "forensic" {
+			return "NO DECEPTION INDICATED (NDI)"
+		}
+		return "TRUTHFUL"
+	default:
+		return "INCONCLUSIVE"
+	}
+}
+
+func (s *Service) clientReportVerdictWording(clientID uint) string {
+	type clientRow struct {
+		ReportVerdictWording string
+	}
+	var row clientRow
+	if err := s.db.Table("clients").
+		Select("report_verdict_wording").
+		Where("id = ?", clientID).
+		Scan(&row).Error; err != nil || strings.TrimSpace(row.ReportVerdictWording) == "" {
+		return "plain"
+	}
+	return normalizeVerdictWording(row.ReportVerdictWording)
+}
+
+func GenerateEncryptedPDF(verdict string, content string, subjectName string, examType string, clientName string, password string, verificationCode string, verificationURL string, signer *PDFSigner, verdictWording string) ([]byte, error) {
 	subjectName = strings.ToUpper(strings.TrimSpace(subjectName))
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	if password != "" {
@@ -730,6 +812,11 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	writeDetailRow("TEST DATE", examDate)
 	writeDetailRow("REPORT DATE", reportDate)
 	writeDetailRow("EXAMINEE", subjectName)
+	if isStructured && strings.TrimSpace(reportData.IdentityVerificationText) != "" {
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.MultiCell(0, 5, strings.TrimSpace(reportData.IdentityVerificationText), "", "L", false)
+		pdf.Ln(4)
+	}
 	pdf.Ln(4)
 
 	if isStructured {
@@ -759,7 +846,12 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		// SECTION 2: EXAMINATION PHASE
 		writeSectionHeading("SECTION 2: EXAMINATION PHASE")
 
-		writeReportParagraph(reportData.ExamPhaseText, 6)
+		writeReportParagraph(reportData.ExamPhaseText, 4)
+		if strings.TrimSpace(reportData.ResponseLegendText) != "" {
+			pdf.SetFont("Helvetica", "I", 8.5)
+			pdf.MultiCell(0, 4.5, strings.TrimSpace(reportData.ResponseLegendText), "", "L", false)
+			pdf.Ln(4)
+		}
 
 		// Q&A Table — draw fixed-height row boxes so MultiCell wraps never break borders
 		if len(reportData.Questions) > 0 {
@@ -858,16 +950,16 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.Cell(25, 6, "Result: ")
 
 		pdf.SetFont("Helvetica", "B", 11)
-		if verdict == "DI" {
+		resultLabel := FormatVerdictLabel(verdict, verdictWording)
+		switch verdict {
+		case "DI":
 			pdf.SetTextColor(200, 0, 0)
-			pdf.Cell(0, 6, "NOT TRUTHFUL")
-		} else if verdict == "NDI" {
+		case "NDI":
 			pdf.SetTextColor(0, 150, 0)
-			pdf.Cell(0, 6, "TRUTHFUL / NO DECEPTION INDICATED")
-		} else {
+		default:
 			pdf.SetTextColor(100, 100, 100)
-			pdf.Cell(0, 6, "INCONCLUSIVE")
 		}
+		pdf.Cell(0, 6, resultLabel)
 		pdf.SetTextColor(0, 0, 0)
 		pdf.Ln(12)
 
@@ -903,10 +995,18 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.Cell(0, 4, signer.Name)
 		pdf.Ln(4)
 		pdf.SetFont("Helvetica", "", 8)
-		pdf.Cell(0, 4, signer.Title)
-		pdf.Ln(4)
-		pdf.Cell(0, 4, signer.Organization)
-		pdf.Ln(4)
+		caption := strings.TrimSpace(signer.Caption)
+		if caption == "" {
+			caption = joinSignerCaption(signer.Title, signer.Organization)
+		}
+		for _, line := range strings.Split(caption, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			pdf.Cell(0, 4, line)
+			pdf.Ln(4)
+		}
 		if signer.SignedAt != nil {
 			pdf.Cell(0, 4, "Signed: "+signer.SignedAt.UTC().Add(4*time.Hour).Format("2 January 2006, 15:04")+" GST")
 			pdf.Ln(4)
@@ -1140,8 +1240,9 @@ func (s *Service) CreateSecureShare(reportID uint, recipientEmail string, expiry
 		examTypeName = "Polygraph Forensic Exam"
 	}
 
-	signer := &PDFSigner{Name: report.SignerName, Title: report.SignerTitle, Organization: report.SignerOrganization, ImageData: report.SignatureImage, SignedAt: report.SignedAt}
-	pdfBytes, err := GenerateEncryptedPDF(report.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode, verificationCode, verificationURL, signer)
+	signer := &PDFSigner{Name: report.SignerName, Title: report.SignerTitle, Organization: report.SignerOrganization, Caption: report.SignerCaption, ImageData: report.SignatureImage, SignedAt: report.SignedAt}
+	verdictWording := s.clientReportVerdictWording(exam.ClientID)
+	pdfBytes, err := GenerateEncryptedPDF(report.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode, verificationCode, verificationURL, signer, verdictWording)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate encrypted PDF: %w", err)
 	}
@@ -1267,8 +1368,9 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int, requested
 		examTypeName = "Polygraph Forensic Exam"
 	}
 
-	signer := &PDFSigner{Name: share.ExamReport.SignerName, Title: share.ExamReport.SignerTitle, Organization: share.ExamReport.SignerOrganization, ImageData: share.ExamReport.SignatureImage, SignedAt: share.ExamReport.SignedAt}
-	pdfBytes, err := GenerateEncryptedPDF(share.ExamReport.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode, verificationCode, verificationURL, signer)
+	signer := &PDFSigner{Name: share.ExamReport.SignerName, Title: share.ExamReport.SignerTitle, Organization: share.ExamReport.SignerOrganization, Caption: share.ExamReport.SignerCaption, ImageData: share.ExamReport.SignatureImage, SignedAt: share.ExamReport.SignedAt}
+	verdictWording := s.clientReportVerdictWording(exam.ClientID)
+	pdfBytes, err := GenerateEncryptedPDF(share.ExamReport.Verdict, decryptedContent, subjectName, examTypeName, clientName, passcode, verificationCode, verificationURL, signer, verdictWording)
 	if err != nil {
 		return nil, err
 	}
@@ -1321,4 +1423,110 @@ func (s *Service) RegenerateSecureReportShare(id uint, expiryDays int, requested
 	}
 
 	return &share, nil
+}
+
+type ReportWorkflowStatusRow struct {
+	ExamID       uint `json:"exam_id"`
+	ReportExists bool `json:"report_exists"`
+	IsLocked     bool `json:"is_locked"`
+	HasShare     bool `json:"has_share"`
+}
+
+func (s *Service) ListReportWorkflowStatuses() ([]ReportWorkflowStatusRow, error) {
+	type reportRow struct {
+		ExamID   uint
+		IsLocked bool
+		ID       uint
+	}
+	var reports []reportRow
+	if err := s.db.Model(&ExamReport{}).
+		Select("exam_id, is_locked, id").
+		Find(&reports).Error; err != nil {
+		return nil, err
+	}
+
+	sharedReportIDs := map[uint]struct{}{}
+	if len(reports) > 0 {
+		reportIDs := make([]uint, 0, len(reports))
+		for _, report := range reports {
+			reportIDs = append(reportIDs, report.ID)
+		}
+		var shareRows []struct {
+			ExamReportID uint
+		}
+		if err := s.db.Model(&SecureReportShare{}).
+			Select("DISTINCT exam_report_id").
+			Where("exam_report_id IN ?", reportIDs).
+			Find(&shareRows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range shareRows {
+			sharedReportIDs[row.ExamReportID] = struct{}{}
+		}
+	}
+
+	rows := make([]ReportWorkflowStatusRow, 0, len(reports))
+	for _, report := range reports {
+		_, hasShare := sharedReportIDs[report.ID]
+		rows = append(rows, ReportWorkflowStatusRow{
+			ExamID:       report.ExamID,
+			ReportExists: true,
+			IsLocked:     report.IsLocked,
+			HasShare:     hasShare,
+		})
+	}
+	return rows, nil
+}
+
+func (s *Service) GenerateReportPreviewPDF(examID uint) ([]byte, string, error) {
+	report, decryptedContent, err := s.GetReport(examID)
+	if err != nil {
+		return nil, "", fmt.Errorf("report not found: %w", err)
+	}
+	if !report.IsLocked {
+		return nil, "", fmt.Errorf("report must be finalized and locked before preview download")
+	}
+
+	var exam Exam
+	if err := s.db.Preload("Subject").Preload("ExamType").First(&exam, report.ExamID).Error; err != nil {
+		return nil, "", fmt.Errorf("exam not found: %w", err)
+	}
+
+	clientName := "Corporate Client"
+	type clientTemp struct {
+		Name string
+	}
+	var cTemp clientTemp
+	if err := s.db.Table("clients").Select("name").Where("id = ?", exam.ClientID).Scan(&cTemp).Error; err == nil && cTemp.Name != "" {
+		clientName = cTemp.Name
+	}
+
+	subjectName := fmt.Sprintf("%s %s", exam.Subject.FirstName, exam.Subject.LastName)
+	examTypeName := exam.Type
+	if examTypeName == "" && exam.ExamType != nil {
+		examTypeName = exam.ExamType.Name
+	}
+	if examTypeName == "" {
+		examTypeName = "Polygraph Forensic Exam"
+	}
+
+	signer := &PDFSigner{
+		Name:         report.SignerName,
+		Title:        report.SignerTitle,
+		Organization: report.SignerOrganization,
+		Caption:      report.SignerCaption,
+		ImageData:    report.SignatureImage,
+		SignedAt:     report.SignedAt,
+	}
+	verdictWording := s.clientReportVerdictWording(exam.ClientID)
+	pdfBytes, err := GenerateEncryptedPDF(report.Verdict, decryptedContent, subjectName, examTypeName, clientName, "", "", "", signer, verdictWording)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate preview PDF: %w", err)
+	}
+
+	fileName := fmt.Sprintf("Forensic_Report_%s_PREVIEW.pdf", strings.TrimSpace(exam.Subject.LastName))
+	if fileName == "Forensic_Report__PREVIEW.pdf" {
+		fileName = fmt.Sprintf("Forensic_Report_Exam_%d_PREVIEW.pdf", examID)
+	}
+	return pdfBytes, fileName, nil
 }

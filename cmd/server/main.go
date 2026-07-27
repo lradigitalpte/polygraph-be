@@ -121,6 +121,7 @@ func main() {
 		&settings.OrganizationSettings{},
 		&inventory.InventoryItem{},
 		&exams.SecureReportShare{},
+		&exams.ReportTemplate{},
 	)
 	if err != nil {
 		logger.Warn("Database migration completed with warnings (some columns may already exist)", zap.Error(err))
@@ -140,6 +141,7 @@ func main() {
 	// Seed database with roles and permissions
 	dbseed.SeedDatabase(db, logger)
 	forms.SeedTemplates(db)
+	exams.SeedReportTemplates(db)
 
 	// Auth: better-auth session tokens are validated against the shared session table
 	// (see middleware.AuthMiddleware). No JWKS/JWT setup required.

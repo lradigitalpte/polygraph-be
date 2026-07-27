@@ -169,13 +169,13 @@ func TestService_FinalizeReport(t *testing.T) {
 	examiner := auth.User{Name: "Malaravan Ron", Email: "examiner@example.com", Status: "active", RoleID: role.ID, SignatureImage: "data:image/png;base64,dGVzdA==", SignatureTitle: "Private Polygraph Examiner", SignatureOrganization: "Polygraph International HR Consultancy LLC"}
 	require.NoError(t, db.Omit("Role").Create(&examiner).Error)
 
-	finalized, err := s.FinalizeReport(exam.ID, 1, "admin@example.com", examiner.ID)
+	finalized, err := s.FinalizeReport(exam.ID, 1, "admin@example.com", examiner.ID, nil)
 	assert.NoError(t, err)
 	assert.True(t, finalized.IsLocked)
 	assert.NotNil(t, finalized.LockedAt)
 	assert.NotEmpty(t, finalized.SignatureExaminer)
 
-	_, err = s.FinalizeReport(exam.ID, 1, "admin@example.com", examiner.ID)
+	_, err = s.FinalizeReport(exam.ID, 1, "admin@example.com", examiner.ID, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already locked")
 }

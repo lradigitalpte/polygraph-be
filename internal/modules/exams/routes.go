@@ -26,6 +26,15 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 	r := router.Group("/reports")
 	{
 		r.POST("", permissionMiddleware("exam:report"), ctrl.CreateReport)
+		r.GET("/templates", permissionMiddleware("exam:report"), ctrl.ListReportTemplates)
+		r.GET("/templates/resolve", permissionMiddleware("exam:report"), ctrl.ResolveReportTemplate)
+		r.GET("/templates/:id", permissionMiddleware("exam:report"), ctrl.GetReportTemplate)
+		r.POST("/templates", permissionMiddleware("report_template:manage"), ctrl.CreateReportTemplate)
+		r.PATCH("/templates/:id", permissionMiddleware("report_template:manage"), ctrl.UpdateReportTemplate)
+		r.DELETE("/templates/:id", permissionMiddleware("report_template:manage"), ctrl.DeleteReportTemplate)
+		r.GET("/workflow-status", permissionMiddleware("exam:view"), ctrl.ListReportWorkflowStatuses)
+		r.GET("/stats", permissionMiddleware("exam:view"), ctrl.GetConsolidatedStats)
+		r.GET("/:id/pdf-preview", permissionMiddleware("exam:report:view_locked"), ctrl.DownloadReportPreviewPDF)
 		r.GET("/:id", permissionMiddleware("exam:view"), ctrl.GetReport)
 		r.POST("/:id/finalize", permissionMiddleware("exam:report"), ctrl.FinalizeReport)
 		r.POST("/:id/override-unlock", permissionMiddleware("exam:report:override"), ctrl.OverrideUnlockReport)
@@ -36,7 +45,6 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		r.POST("/shares/:id/regenerate", permissionMiddleware("exam:view"), ctrl.RegenerateSecureShare)
 		r.POST("/shares/:id/archive", permissionMiddleware("exam:view"), ctrl.ArchiveSecureShare)
 		r.POST("/shares/:id/restore", permissionMiddleware("exam:view"), ctrl.RestoreSecureShare)
-		r.GET("/stats", permissionMiddleware("exam:view"), ctrl.GetConsolidatedStats)
 	}
 }
 

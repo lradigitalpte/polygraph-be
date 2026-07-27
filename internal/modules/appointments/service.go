@@ -47,6 +47,9 @@ func (s *Service) CreateClient(client *Client) error {
 		client.EmailSessionReminders = true
 		client.EmailSummaryTime = "17:00"
 	}
+	if client.ReportVerdictWording == "" {
+		client.ReportVerdictWording = "plain"
+	}
 	return s.db.Create(client).Error
 }
 
@@ -140,9 +143,19 @@ func (s *Service) UpdateClient(id string, input *Client) error {
 	if input.EmailSummaryTime == "" {
 		input.EmailSummaryTime = client.EmailSummaryTime
 	}
+	if input.ReportVerdictWording == "" {
+		input.ReportVerdictWording = client.ReportVerdictWording
+	}
+	if input.ReportVerdictWording == "" {
+		input.ReportVerdictWording = "plain"
+	}
 	validDeliveryMode := map[string]bool{"immediate": true, "daily_summary": true, "important_only": true, "none": true}
 	if !validDeliveryMode[input.EmailDeliveryMode] {
 		return errors.New("invalid email delivery mode")
+	}
+	validVerdictWording := map[string]bool{"plain": true, "forensic": true}
+	if !validVerdictWording[input.ReportVerdictWording] {
+		return errors.New("invalid report verdict wording")
 	}
 	if _, err := time.Parse("15:04", input.EmailSummaryTime); err != nil {
 		return errors.New("invalid email summary time")
@@ -162,8 +175,10 @@ func (s *Service) UpdateClient(id string, input *Client) error {
 		"email_booking_notices":    input.EmailBookingNotices,
 		"email_session_reminders":  input.EmailSessionReminders,
 		"email_examinee_fallback":  input.EmailExamineeFallback,
-		"email_summary_time":       input.EmailSummaryTime,
-		"notes":                    strings.TrimSpace(input.Notes),
+		"email_summary_time":         input.EmailSummaryTime,
+		"report_verdict_wording":     input.ReportVerdictWording,
+		"default_report_template_id": input.DefaultReportTemplateID,
+		"notes":                      strings.TrimSpace(input.Notes),
 	}
 
 	return s.db.Model(&client).Updates(updates).Error

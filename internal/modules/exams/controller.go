@@ -165,6 +165,10 @@ func (ctrl *Controller) GetReport(c *gin.Context) {
 		"locked_at":          report.LockedAt,
 		"signature_examiner": report.SignatureExaminer,
 		"signature_client":   report.SignatureClient,
+		"signer_name":        report.SignerName,
+		"signer_caption":     report.SignerCaption,
+		"signer_title":       report.SignerTitle,
+		"signer_organization": report.SignerOrganization,
 	})
 }
 
@@ -188,15 +192,20 @@ func (ctrl *Controller) FinalizeReport(c *gin.Context) {
 	actorEmail, _ := c.Get("email")
 	emailStr, _ := actorEmail.(string)
 	var input struct {
-		ExaminerID             uint `json:"examiner_id" binding:"required"`
-		AuthorizationConfirmed bool `json:"authorization_confirmed" binding:"required"`
+		ExaminerID             uint   `json:"examiner_id" binding:"required"`
+		AuthorizationConfirmed bool   `json:"authorization_confirmed" binding:"required"`
+		SignerDisplayName      string `json:"signer_display_name"`
+		SignerCaptionLines     string `json:"signer_caption_lines"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil || !input.AuthorizationConfirmed {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Examiner authorization confirmation is required"})
 		return
 	}
 
-	report, finalizeErr := ctrl.service.FinalizeReport(uint(examID), userID, emailStr, input.ExaminerID)
+	report, finalizeErr := ctrl.service.FinalizeReport(uint(examID), userID, emailStr, input.ExaminerID, &FinalizeReportOptions{
+		SignerDisplayName:  input.SignerDisplayName,
+		SignerCaptionLines: input.SignerCaptionLines,
+	})
 	if finalizeErr != nil {
 		status := http.StatusBadRequest
 		if strings.Contains(finalizeErr.Error(), "not found") {
@@ -215,6 +224,7 @@ func (ctrl *Controller) FinalizeReport(c *gin.Context) {
 		"locked_at":          report.LockedAt,
 		"signature_examiner": report.SignatureExaminer,
 		"signer_name":        report.SignerName,
+		"signer_caption":     report.SignerCaption,
 		"signed_at":          report.SignedAt,
 	})
 }
@@ -608,6 +618,43 @@ func (ctrl *Controller) RegenerateSecureShare(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, share)
+}
+
+func (ctrl *Controller) ListReportWorkflowStatuses(c *gin.Context) {
+	rows, err := ctrl.service.ListReportWorkflowStatuses()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch report workflow statuses"})
+		return
+	}
+	c.JSON(http.StatusOK, rows)
+}
+
+func (ctrl *Controller) DownloadReportPreviewPDF(c *gin.Context) {
+	examID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid report id"})
+		return
+	}
+	if !middleware.HasPermission(c, "exam:report:view_locked") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied: requires exam:report:view_locked"})
+		return
+	}
+
+	pdfBytes, fileName, err := ctrl.service.GenerateReportPreviewPDF(uint(examID))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(err.Error(), "finalized and locked") {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	c.Data(http.StatusOK, "application/pdf", pdfBytes)
 }
 
 func (ctrl *Controller) GetConsolidatedStats(c *gin.Context) {

@@ -29,7 +29,9 @@ type Client struct {
 	EmailExamineeFallback  bool           `gorm:"default:false" json:"email_examinee_fallback"`
 	EmailSummaryTime       string         `gorm:"size:5;default:'17:00'" json:"email_summary_time"`
 	LastEmailSummaryAt     *time.Time     `json:"last_email_summary_at,omitempty"`
-	Notes                  string         `gorm:"type:text" json:"notes"`
+	ReportVerdictWording      string         `gorm:"size:20;default:'plain'" json:"report_verdict_wording"` // plain, forensic
+	DefaultReportTemplateID   *uint          `gorm:"index" json:"default_report_template_id,omitempty"`
+	Notes                     string         `gorm:"type:text" json:"notes"`
 }
 
 // Appointment represents a scheduled polygraph session

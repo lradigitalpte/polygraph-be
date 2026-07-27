@@ -69,6 +69,7 @@ type ExamReport struct {
 	SignerName         string     `gorm:"size:255" json:"signer_name,omitempty"`
 	SignerTitle        string     `gorm:"size:255" json:"signer_title,omitempty"`
 	SignerOrganization string     `gorm:"size:255" json:"signer_organization,omitempty"`
+	SignerCaption      string     `gorm:"type:text" json:"signer_caption,omitempty"` // Free-form lines below signature image
 	SignedAt           *time.Time `json:"signed_at,omitempty"`
 	SignatureClient    string     `gorm:"type:text" json:"signature_client,omitempty"` // Cryptographic digital signature (base64)
 	IsLocked           bool       `gorm:"default:false" json:"is_locked"`
@@ -169,4 +170,19 @@ type SecureReportShare struct {
 	Status           string           `gorm:"size:50;default:'sent'" json:"status"` // sent, viewed
 	ExpiresAt        time.Time        `json:"expires_at"`
 	ArchivedAt       *time.Time       `gorm:"index" json:"archived_at,omitempty"`
+}
+
+// ReportTemplate is a reusable preset for forensic report body content.
+type ReportTemplate struct {
+	ID          uint           `gorm:"primarykey" json:"id"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	Slug        string         `gorm:"size:80;uniqueIndex;not null" json:"slug"`
+	Name        string         `gorm:"size:255;not null" json:"name"`
+	Category    string         `gorm:"size:50;default:'generic'" json:"category"` // generic, eva
+	Description string         `gorm:"type:text" json:"description,omitempty"`
+	ContentJSON string         `gorm:"type:text;not null" json:"content_json"`
+	IsDefault   bool           `gorm:"default:false" json:"is_default"`
+	Active      bool           `gorm:"default:true" json:"active"`
 }
