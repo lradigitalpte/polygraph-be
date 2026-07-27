@@ -813,22 +813,13 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	writeDetailRow("REPORT DATE", reportDate)
 	writeDetailRow("EXAMINEE", subjectName)
 	if isStructured && strings.TrimSpace(reportData.IdentityVerificationText) != "" {
-		pdf.SetFont("Helvetica", "", 9)
-		pdf.MultiCell(0, 5, strings.TrimSpace(reportData.IdentityVerificationText), "", "L", false)
-		pdf.Ln(4)
+		writeRichReportParagraph(pdf, strings.TrimSpace(reportData.IdentityVerificationText), 9, "", 4)
 	}
 	pdf.Ln(4)
 
 	if isStructured {
 		writeReportParagraph := func(text string, afterLn float64) {
-			if strings.TrimSpace(text) == "" {
-				return
-			}
-			pdf.SetFont("Helvetica", "", 9.5)
-			pdf.MultiCell(0, 5, text, "", "L", false)
-			if afterLn > 0 {
-				pdf.Ln(afterLn)
-			}
+			writeRichReportParagraph(pdf, text, 9.5, "", afterLn)
 		}
 
 		writeSectionHeading := func(title string) {
@@ -848,9 +839,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 
 		writeReportParagraph(reportData.ExamPhaseText, 4)
 		if strings.TrimSpace(reportData.ResponseLegendText) != "" {
-			pdf.SetFont("Helvetica", "I", 8.5)
-			pdf.MultiCell(0, 4.5, strings.TrimSpace(reportData.ResponseLegendText), "", "L", false)
-			pdf.Ln(4)
+			writeRichReportParagraph(pdf, strings.TrimSpace(reportData.ResponseLegendText), 8.5, "I", 4)
 		}
 
 		// Q&A Table — draw fixed-height row boxes so MultiCell wraps never break borders
