@@ -26,5 +26,7 @@ type User struct {
 	SignatureImage        string         `gorm:"type:text" json:"-"`
 	SignatureTitle        string         `gorm:"size:255" json:"signature_title,omitempty"`
 	SignatureOrganization string         `gorm:"size:255" json:"signature_organization,omitempty"`
+	CredentialsText       string         `gorm:"type:text" json:"credentials_text,omitempty"`
 	HasSignature          bool           `gorm:"-" json:"has_signature"`
+	HasCredentials        bool           `gorm:"-" json:"has_credentials"`
 }

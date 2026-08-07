@@ -220,7 +220,12 @@ func (ctrl *Controller) writeSignature(c *gin.Context, userID uint) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "signature not configured"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"image": user.SignatureImage, "title": user.SignatureTitle, "organization": user.SignatureOrganization})
+	c.JSON(http.StatusOK, gin.H{
+		"image":            user.SignatureImage,
+		"title":            user.SignatureTitle,
+		"organization":     user.SignatureOrganization,
+		"credentials_text": user.CredentialsText,
+	})
 }
 
 func (ctrl *Controller) UploadMySignature(c *gin.Context) {
@@ -296,6 +301,29 @@ func (ctrl *Controller) DeleteMySignature(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func (ctrl *Controller) UpdateMyCredentials(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		CredentialsText string `json:"credentials_text"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid credentials payload"})
+		return
+	}
+	user, err := ctrl.service.UpdateCredentials(userID, body.CredentialsText)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"credentials_text": user.CredentialsText,
+		"has_credentials":  user.HasCredentials,
+	})
 }
 
 func (ctrl *Controller) DeleteMe(c *gin.Context) {

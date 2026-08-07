@@ -69,11 +69,13 @@ type ExamReport struct {
 	SignerName         string     `gorm:"size:255" json:"signer_name,omitempty"`
 	SignerTitle        string     `gorm:"size:255" json:"signer_title,omitempty"`
 	SignerOrganization string     `gorm:"size:255" json:"signer_organization,omitempty"`
-	SignerCaption      string     `gorm:"type:text" json:"signer_caption,omitempty"` // Free-form lines below signature image
-	SignedAt           *time.Time `json:"signed_at,omitempty"`
-	SignatureClient    string     `gorm:"type:text" json:"signature_client,omitempty"` // Cryptographic digital signature (base64)
-	IsLocked           bool       `gorm:"default:false" json:"is_locked"`
-	LockedAt           *time.Time `json:"locked_at,omitempty"`
+	SignerCaption       string     `gorm:"type:text" json:"signer_caption,omitempty"` // Title + organization from examiner profile
+	CredentialsText     string     `gorm:"type:text" json:"credentials_text,omitempty"`
+	IncludeCredentials  bool       `gorm:"default:false" json:"include_credentials"`
+	SignedAt            *time.Time `json:"signed_at,omitempty"`
+	SignatureClient     string     `gorm:"type:text" json:"signature_client,omitempty"` // Cryptographic digital signature (base64)
+	IsLocked            bool       `gorm:"default:false" json:"is_locked"`
+	LockedAt            *time.Time `json:"locked_at,omitempty"`
 }
 
 // BeforeUpdate prevents modifications if the report is locked

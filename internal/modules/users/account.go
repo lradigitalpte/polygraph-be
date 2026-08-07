@@ -64,6 +64,15 @@ func (s *Service) DeleteSignature(userID uint) error {
 	return nil
 }
 
+// UpdateCredentials saves optional examiner credentials printed on a separate report page when selected.
+func (s *Service) UpdateCredentials(userID uint, credentialsText string) (*auth.User, error) {
+	if err := s.db.Model(&auth.User{}).Where("id = ?", userID).Update("credentials_text", strings.TrimSpace(credentialsText)).Error; err != nil {
+		return nil, err
+	}
+	s.invalidateUsersCache()
+	return s.GetByID(userID)
+}
+
 func (s *Service) GetMe(userID uint) (*auth.User, error) {
 	return s.GetByID(userID)
 }

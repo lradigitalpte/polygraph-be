@@ -156,19 +156,21 @@ func (ctrl *Controller) GetReport(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":                 report.ID,
-		"exam_id":            report.ExamID,
-		"verdict":            report.Verdict,
-		"content":            decrypted,
-		"created_at":         report.CreatedAt,
-		"is_locked":          report.IsLocked,
-		"locked_at":          report.LockedAt,
-		"signature_examiner": report.SignatureExaminer,
-		"signature_client":   report.SignatureClient,
-		"signer_name":        report.SignerName,
-		"signer_caption":     report.SignerCaption,
-		"signer_title":       report.SignerTitle,
+		"id":                  report.ID,
+		"exam_id":             report.ExamID,
+		"verdict":             report.Verdict,
+		"content":             decrypted,
+		"created_at":          report.CreatedAt,
+		"is_locked":           report.IsLocked,
+		"locked_at":           report.LockedAt,
+		"signature_examiner":  report.SignatureExaminer,
+		"signature_client":    report.SignatureClient,
+		"signer_name":         report.SignerName,
+		"signer_caption":      report.SignerCaption,
+		"signer_title":        report.SignerTitle,
 		"signer_organization": report.SignerOrganization,
+		"credentials_text":    report.CredentialsText,
+		"include_credentials": report.IncludeCredentials,
 	})
 }
 
@@ -192,10 +194,9 @@ func (ctrl *Controller) FinalizeReport(c *gin.Context) {
 	actorEmail, _ := c.Get("email")
 	emailStr, _ := actorEmail.(string)
 	var input struct {
-		ExaminerID             uint   `json:"examiner_id" binding:"required"`
-		AuthorizationConfirmed bool   `json:"authorization_confirmed" binding:"required"`
-		SignerDisplayName      string `json:"signer_display_name"`
-		SignerCaptionLines     string `json:"signer_caption_lines"`
+		ExaminerID             uint `json:"examiner_id" binding:"required"`
+		AuthorizationConfirmed bool `json:"authorization_confirmed" binding:"required"`
+		IncludeCredentials     bool `json:"include_credentials"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil || !input.AuthorizationConfirmed {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Examiner authorization confirmation is required"})
@@ -203,8 +204,7 @@ func (ctrl *Controller) FinalizeReport(c *gin.Context) {
 	}
 
 	report, finalizeErr := ctrl.service.FinalizeReport(uint(examID), userID, emailStr, input.ExaminerID, &FinalizeReportOptions{
-		SignerDisplayName:  input.SignerDisplayName,
-		SignerCaptionLines: input.SignerCaptionLines,
+		IncludeCredentials: input.IncludeCredentials,
 	})
 	if finalizeErr != nil {
 		status := http.StatusBadRequest
@@ -218,14 +218,16 @@ func (ctrl *Controller) FinalizeReport(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"id":                 report.ID,
-		"exam_id":            report.ExamID,
-		"is_locked":          report.IsLocked,
-		"locked_at":          report.LockedAt,
-		"signature_examiner": report.SignatureExaminer,
-		"signer_name":        report.SignerName,
-		"signer_caption":     report.SignerCaption,
-		"signed_at":          report.SignedAt,
+		"id":                  report.ID,
+		"exam_id":             report.ExamID,
+		"is_locked":           report.IsLocked,
+		"locked_at":           report.LockedAt,
+		"signature_examiner":  report.SignatureExaminer,
+		"signer_name":         report.SignerName,
+		"signer_caption":      report.SignerCaption,
+		"credentials_text":    report.CredentialsText,
+		"include_credentials": report.IncludeCredentials,
+		"signed_at":           report.SignedAt,
 	})
 }
 
