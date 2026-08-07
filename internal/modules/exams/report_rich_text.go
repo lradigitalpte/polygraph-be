@@ -58,7 +58,8 @@ func writeRichReportParagraph(pdf *gofpdf.Fpdf, text string, fontSize float64, s
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	htmlBody := richTextToHTMLFromRaw(text)
+	// TipTap HTML (preferred) or legacy **bold** / _italic_ markup.
+	htmlBody := credentialsHTMLToPDFBasic(text)
 	if htmlBody == "" {
 		return
 	}

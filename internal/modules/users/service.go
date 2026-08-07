@@ -91,7 +91,7 @@ func (s *Service) GetExaminers(search string) ([]auth.User, error) {
 	err := query.Order("users.name ASC").Find(&users).Error
 	for i := range users {
 		users[i].HasSignature = users[i].SignatureImage != ""
-		users[i].HasCredentials = strings.TrimSpace(users[i].CredentialsText) != ""
+		users[i].HasCredentials = !isBlankCredentialsHTML(users[i].CredentialsText)
 	}
 	return users, err
 }
@@ -102,7 +102,7 @@ func (s *Service) GetByID(id uint) (*auth.User, error) {
 		return nil, err
 	}
 	user.HasSignature = user.SignatureImage != ""
-	user.HasCredentials = strings.TrimSpace(user.CredentialsText) != ""
+	user.HasCredentials = !isBlankCredentialsHTML(user.CredentialsText)
 	return &user, nil
 }
 

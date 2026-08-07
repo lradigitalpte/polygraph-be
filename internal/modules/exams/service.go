@@ -299,7 +299,7 @@ func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string, e
 	credentialsText := ""
 	if includeCredentials {
 		credentialsText = strings.TrimSpace(examiner.CredentialsText)
-		if credentialsText == "" {
+		if credentialsContentEmpty(credentialsText) {
 			return nil, fmt.Errorf("selected examiner has not added credentials in My Profile")
 		}
 	}
@@ -1009,18 +1009,8 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 			pdf.Cell(0, 4, "Verification: "+verificationCode)
 		}
 
-		if signer.IncludeCredentials {
-			credentials := strings.TrimSpace(signer.CredentialsText)
-			if credentials != "" {
-				pdf.AddPage()
-				pdf.SetTextColor(180, 100, 40)
-				pdf.SetFont("Helvetica", "B", 14)
-				pdf.Cell(0, 8, "POLYGRAPH EXAMINER CREDENTIALS")
-				pdf.Ln(12)
-				pdf.SetTextColor(0, 0, 0)
-				pdf.SetFont("Helvetica", "", 10)
-				pdf.MultiCell(0, 5.5, credentials, "", "L", false)
-			}
+		if signer.IncludeCredentials && !credentialsContentEmpty(signer.CredentialsText) {
+			writeCredentialsPage(pdf, signer.CredentialsText)
 		}
 	}
 

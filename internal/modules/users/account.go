@@ -66,11 +66,41 @@ func (s *Service) DeleteSignature(userID uint) error {
 
 // UpdateCredentials saves optional examiner credentials printed on a separate report page when selected.
 func (s *Service) UpdateCredentials(userID uint, credentialsText string) (*auth.User, error) {
-	if err := s.db.Model(&auth.User{}).Where("id = ?", userID).Update("credentials_text", strings.TrimSpace(credentialsText)).Error; err != nil {
+	trimmed := strings.TrimSpace(credentialsText)
+	// Persist empty string when TipTap sends empty HTML like <p></p>.
+	if isBlankCredentialsHTML(trimmed) {
+		trimmed = ""
+	}
+	if err := s.db.Model(&auth.User{}).Where("id = ?", userID).Update("credentials_text", trimmed).Error; err != nil {
 		return nil, err
 	}
 	s.invalidateUsersCache()
 	return s.GetByID(userID)
+}
+
+func isBlankCredentialsHTML(input string) bool {
+	if input == "" {
+		return true
+	}
+	plain := input
+	plain = strings.ReplaceAll(plain, "<br>", " ")
+	plain = strings.ReplaceAll(plain, "<br/>", " ")
+	plain = strings.ReplaceAll(plain, "<br />", " ")
+	for _, tag := range []string{"p", "div", "span", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "b", "strong", "i", "em", "u"} {
+		plain = strings.ReplaceAll(plain, "<"+tag+">", " ")
+		plain = strings.ReplaceAll(plain, "</"+tag+">", " ")
+	}
+	// Strip any remaining simple tags.
+	for {
+		start := strings.Index(plain, "<")
+		end := strings.Index(plain, ">")
+		if start < 0 || end < start {
+			break
+		}
+		plain = plain[:start] + " " + plain[end+1:]
+	}
+	plain = strings.ReplaceAll(plain, "&nbsp;", " ")
+	return strings.TrimSpace(plain) == ""
 }
 
 func (s *Service) GetMe(userID uint) (*auth.User, error) {
