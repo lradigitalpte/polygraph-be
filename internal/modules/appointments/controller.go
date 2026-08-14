@@ -80,15 +80,9 @@ func (ctrl *Controller) CreateClient(c *gin.Context) {
 // @Success 200 {array} Client
 // @Router /api/clients [get]
 func (ctrl *Controller) GetClients(c *gin.Context) {
-	var (
-		clients []Client
-		err     error
-	)
-	if examinerID, restricted := restrictToExaminer(c); restricted {
-		clients, err = ctrl.service.GetClientsForExaminer(examinerID, c.Query("search"))
-	} else {
-		clients, err = ctrl.service.GetAllClients(c.Query("search"))
-	}
+	// Clients are global — any user with client:view sees the full list.
+	// Scoping (per-examiner filtering) only applies to appointments, not clients.
+	clients, err := ctrl.service.GetAllClients(c.Query("search"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch clients"})
 		return
@@ -97,12 +91,7 @@ func (ctrl *Controller) GetClients(c *gin.Context) {
 }
 
 func (ctrl *Controller) GetClient(c *gin.Context) {
-	if examinerID, restricted := restrictToExaminer(c); restricted {
-		if !ctrl.service.ExaminerOwnsClient(examinerID, c.Param("id")) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "You don't have access to this client"})
-			return
-		}
-	}
+	// Clients are global — any user with client:view can open any client record.
 	client, err := ctrl.service.GetClientByID(c.Param("id"))
 	if err != nil {
 		if err.Error() == "client not found" {
