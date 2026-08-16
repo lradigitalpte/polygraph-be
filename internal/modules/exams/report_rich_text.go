@@ -65,7 +65,7 @@ func writeRichReportParagraph(pdf *gofpdf.Fpdf, text string, fontSize float64, s
 	pdf.SetFont("Helvetica", style, fontSize)
 	html := pdf.HTMLBasicNew()
 	_, lineHt := pdf.GetFontSize()
-	html.Write(lineHt*1.38, htmlBody)
+	html.Write(lineHt*1.22, htmlBody)
 	if afterLn > 0 {
 		pdf.Ln(afterLn)
 	}
