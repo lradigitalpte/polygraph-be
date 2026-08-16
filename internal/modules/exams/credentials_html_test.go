@@ -36,3 +36,14 @@ func TestCredentialsHTMLToPDFBasic(t *testing.T) {
 		t.Fatalf("expected centered paragraph, got %q", out)
 	}
 }
+
+func TestCredentialsApostrophes(t *testing.T) {
+	input := `<p>Lynn Marcy (USA) &#39;00 &amp; &#39;05</p>`
+	out := credentialsHTMLToPDFBasic(input)
+	if strings.Contains(out, "&#39;") {
+		t.Fatalf("unexpected &#39; in PDF HTML output: %q", out)
+	}
+	if !strings.Contains(out, "'00") || !strings.Contains(out, "'05") {
+		t.Fatalf("expected unescaped apostrophes in PDF HTML output: %q", out)
+	}
+}

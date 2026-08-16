@@ -1,7 +1,6 @@
 package exams
 
 import (
-	"html"
 	"strings"
 
 	"github.com/jung-kurt/gofpdf"
@@ -15,7 +14,7 @@ func richTextToHTMLFromRaw(input string) string {
 			end := strings.Index(input[i+2:], "**")
 			if end >= 0 {
 				b.WriteString("<b>")
-				b.WriteString(html.EscapeString(input[i+2 : i+2+end]))
+				b.WriteString(escapePDFHTMLText(input[i+2 : i+2+end]))
 				b.WriteString("</b>")
 				i += 2 + end + 2
 				continue
@@ -25,7 +24,7 @@ func richTextToHTMLFromRaw(input string) string {
 			end := strings.Index(input[i+1:], "_")
 			if end >= 0 {
 				b.WriteString("<i>")
-				b.WriteString(html.EscapeString(input[i+1 : i+1+end]))
+				b.WriteString(escapePDFHTMLText(input[i+1 : i+1+end]))
 				b.WriteString("</i>")
 				i += 1 + end + 1
 				continue
@@ -48,7 +47,7 @@ func richTextToHTMLFromRaw(input string) string {
 			i++
 			continue
 		}
-		b.WriteString(html.EscapeString(input[i:next]))
+		b.WriteString(escapePDFHTMLText(input[i:next]))
 		i = next
 	}
 	return b.String()

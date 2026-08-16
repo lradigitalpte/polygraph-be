@@ -34,6 +34,13 @@ func stripHTMLToText(input string) string {
 	return strings.TrimSpace(reWhitespace.ReplaceAllString(s, " "))
 }
 
+func escapePDFHTMLText(raw string) string {
+	s := html.UnescapeString(raw)
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
+}
+
 // credentialsHTMLToPDFBasic converts TipTap HTML into gofpdf HTMLBasic-friendly markup.
 func credentialsHTMLToPDFBasic(input string) string {
 	trimmed := strings.TrimSpace(input)
@@ -67,7 +74,7 @@ func credentialsHTMLToPDFBasic(input string) string {
 		if raw == "" {
 			return
 		}
-		b.WriteString(html.EscapeString(html.UnescapeString(raw)))
+		b.WriteString(escapePDFHTMLText(raw))
 	}
 
 	for pos < len(trimmed) {
@@ -147,10 +154,10 @@ func credentialsHTMLToPDFBasic(input string) string {
 			}
 		case "li":
 			if closing {
-				b.WriteString("<br>")
+				b.WriteString("<br><br>")
 			} else if orderedDepth > 0 {
 				orderedIndex++
-				b.WriteString(html.EscapeString(strconv.Itoa(orderedIndex) + ". "))
+				b.WriteString(strconv.Itoa(orderedIndex) + ". ")
 			} else {
 				b.WriteString("• ")
 			}
@@ -189,5 +196,5 @@ func writeCredentialsPage(pdf *gofpdf.Fpdf, credentialsHTML string) {
 	pdf.SetFont("Helvetica", "", 10)
 	htmlWriter := pdf.HTMLBasicNew()
 	_, lineHt := pdf.GetFontSize()
-	htmlWriter.Write(lineHt+1.2, body)
+	htmlWriter.Write(lineHt*1.55, body)
 }
