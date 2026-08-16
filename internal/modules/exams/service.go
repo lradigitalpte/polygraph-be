@@ -829,6 +829,7 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		}
 
 		writeSectionHeading := func(title string) {
+			pdf.Ln(4)
 			pdf.SetFont("Helvetica", "BU", 10)
 			pdf.Cell(0, 6, title)
 			pdf.Ln(7)
@@ -837,20 +838,22 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		// SECTION 1: PRE-EXAMINATION PHASE — builder content only, no hardcoded fallbacks
 		writeSectionHeading("SECTION 1: PRE-EXAMINATION PHASE")
 
-		writeReportParagraph(reportData.PreTestPhaseText, 3)
-		writeReportParagraph(reportData.PreTestNotes, 5)
+		writeReportParagraph(reportData.PreTestPhaseText, 4)
+		writeReportParagraph(reportData.PreTestNotes, 6)
 
 		// SECTION 2: EXAMINATION PHASE
 		writeSectionHeading("SECTION 2: EXAMINATION PHASE")
 
 		examText := strings.TrimSpace(reportData.ExamPhaseText)
-		writeReportParagraph(examText, 3)
+		writeReportParagraph(examText, 4)
 		if strings.TrimSpace(reportData.ResponseLegendText) != "" && !strings.Contains(examText, "Responses highlighted in red") {
-			writeRichReportParagraph(pdf, strings.TrimSpace(reportData.ResponseLegendText), 8.5, "I", 3)
+			writeRichReportParagraph(pdf, strings.TrimSpace(reportData.ResponseLegendText), 8.5, "I", 4)
 		}
 
 		// Q&A Table — draw fixed-height row boxes so MultiCell wraps never break borders
 		if len(reportData.Questions) > 0 {
+			pdf.Ln(5)
+
 			const (
 				colSN   = 15.0
 				colQ    = 125.0

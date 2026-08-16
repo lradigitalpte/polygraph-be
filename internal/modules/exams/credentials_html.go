@@ -122,7 +122,7 @@ func credentialsHTMLToPDFBasic(input string) string {
 			if closing {
 				closeHeading()
 				closeCenter()
-				b.WriteString("<br>")
+				b.WriteString("<br><br>")
 			} else {
 				align := ""
 				if m := reStyleAlign.FindStringSubmatch(attrs); len(m) == 2 {
