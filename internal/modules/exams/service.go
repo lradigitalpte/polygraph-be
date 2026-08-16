@@ -647,6 +647,7 @@ type StructuredReport struct {
 	CooperationMode            string `json:"cooperation_mode,omitempty"`
 	PreExamQuestionCountText   string `json:"pre_exam_question_count_text,omitempty"`
 	ResponseLegendText         string `json:"response_legend_text,omitempty"`
+	EnableColorCoding          bool   `json:"enable_color_coding,omitempty"`
 	SourceTemplateID           uint   `json:"source_template_id,omitempty"`
 }
 
@@ -922,8 +923,21 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 
 				// Answer — vertically centered
 				pdf.SetFont("Helvetica", "B", 9)
+				if reportData.EnableColorCoding {
+					eval := strings.TrimSpace(q.Evaluation)
+					if strings.Contains(eval, "Deceptive") || (strings.Contains(eval, "Reaction") && !strings.Contains(eval, "No Reaction")) {
+						pdf.SetTextColor(220, 38, 38)
+					} else if strings.EqualFold(eval, "No Reaction") {
+						pdf.SetTextColor(22, 163, 74)
+					} else {
+						pdf.SetTextColor(0, 0, 0)
+					}
+				} else {
+					pdf.SetTextColor(0, 0, 0)
+				}
 				pdf.SetXY(x+colSN+colQ, y+(rowH-lineH)/2)
 				pdf.CellFormat(colA, lineH, answerText, "", 0, "C", false, 0, "")
+				pdf.SetTextColor(0, 0, 0)
 
 				pdf.SetXY(x, y+rowH)
 			}
