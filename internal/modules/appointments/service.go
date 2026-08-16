@@ -770,7 +770,7 @@ func (s *Service) EmailAppointmentConfirmation(apptID uint) error {
 		examinerName = examiner.Name
 	}
 
-	when := appt.ScheduledAt.Format("Monday, 2 January 2006 at 15:04")
+	when := appt.ScheduledAt.In(timeutil.ClinicLocation()).Format("Monday, 2 January 2006 at 15:04 (GST)")
 	subject := fmt.Sprintf("Your polygraph session is scheduled — %s", formatAppointmentCode(appt.ID))
 	body := fmt.Sprintf(
 		"Hello %s,\n\nYour polygraph examination has been scheduled. Here are the details:\n\nReference: %s\nDate & time: %s\nDuration: %d minutes\nExaminer: %s\n\nPlease arrive 15 minutes early and bring valid photo ID. If you need to reschedule, reply to this email or contact our office.\n\nThank you,\nPolygraph Forensic System",
@@ -821,7 +821,7 @@ func (s *Service) EmailAppointmentReminder(apptID uint) error {
 		examinerName = examiner.Name
 	}
 
-	when := appt.ScheduledAt.Format("Monday, 2 January 2006 at 15:04")
+	when := appt.ScheduledAt.In(timeutil.ClinicLocation()).Format("Monday, 2 January 2006 at 15:04 (GST)")
 	subject := fmt.Sprintf("Reminder: your polygraph session — %s", formatAppointmentCode(appt.ID))
 	body := fmt.Sprintf(
 		"Hello %s,\n\nThis is a reminder of your upcoming polygraph examination.\n\nReference: %s\nDate & time: %s\nDuration: %d minutes\nExaminer: %s\n\nPlease arrive 15 minutes early, bring valid photo ID, and avoid caffeine for 4 hours before the session. Reply to this email if you need to reschedule.\n\nThank you,\nPolygraph Forensic System",
@@ -937,7 +937,7 @@ func (s *Service) RunCorporateDailySummaries() (int, error) {
 			if name == "" {
 				name = fmt.Sprintf("Examinee #%d", appt.SubjectID)
 			}
-			lines = append(lines, fmt.Sprintf("• %s — %s — %s", name, appt.ScheduledAt.Format("Mon, 2 Jan 2006 at 15:04"), strings.Title(appt.Status)))
+			lines = append(lines, fmt.Sprintf("• %s — %s — %s", name, appt.ScheduledAt.In(timeutil.ClinicLocation()).Format("Mon, 2 Jan 2006 at 15:04 GST"), strings.Title(appt.Status)))
 		}
 		body := fmt.Sprintf("Hello %s,\n\nHere is your consolidated Polygraph activity summary.\n\nNew bookings: %d\nCompleted: %d\nCancelled: %d\n\nSessions\n%s\n\nInvoices and reports are sent separately only when requested.\n\nThank you,\nPolygraph Forensic System", client.Name, newBookings, completed, cancelled, strings.Join(lines, "\n"))
 		if err := sendSMTPMail(client.Email, "Daily Polygraph activity summary", body); err != nil {
