@@ -819,9 +819,10 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 	writeDetailRow("REPORT DATE", reportDate)
 	writeDetailRow("EXAMINEE", subjectName)
 	if isStructured && strings.TrimSpace(reportData.IdentityVerificationText) != "" {
-		writeRichReportParagraph(pdf, strings.TrimSpace(reportData.IdentityVerificationText), 9, "", 4)
+		pdf.Ln(3)
+		writeRichReportParagraph(pdf, strings.TrimSpace(reportData.IdentityVerificationText), 9, "", 6)
 	}
-	pdf.Ln(4)
+	pdf.Ln(5)
 
 	if isStructured {
 		writeReportParagraph := func(text string, afterLn float64) {
@@ -829,25 +830,25 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		}
 
 		writeSectionHeading := func(title string) {
-			pdf.Ln(4)
+			pdf.Ln(5)
 			pdf.SetFont("Helvetica", "BU", 10)
 			pdf.Cell(0, 6, title)
-			pdf.Ln(7)
+			pdf.Ln(8)
 		}
 
 		// SECTION 1: PRE-EXAMINATION PHASE — builder content only, no hardcoded fallbacks
 		writeSectionHeading("SECTION 1: PRE-EXAMINATION PHASE")
 
-		writeReportParagraph(reportData.PreTestPhaseText, 4)
-		writeReportParagraph(reportData.PreTestNotes, 6)
+		writeReportParagraph(reportData.PreTestPhaseText, 7)
+		writeReportParagraph(reportData.PreTestNotes, 7)
 
 		// SECTION 2: EXAMINATION PHASE
 		writeSectionHeading("SECTION 2: EXAMINATION PHASE")
 
 		examText := strings.TrimSpace(reportData.ExamPhaseText)
-		writeReportParagraph(examText, 4)
+		writeReportParagraph(examText, 7)
 		if strings.TrimSpace(reportData.ResponseLegendText) != "" && !strings.Contains(examText, "Responses highlighted in red") {
-			writeRichReportParagraph(pdf, strings.TrimSpace(reportData.ResponseLegendText), 8.5, "I", 4)
+			writeRichReportParagraph(pdf, strings.TrimSpace(reportData.ResponseLegendText), 8.5, "I", 6)
 		}
 
 		// Q&A Table — draw fixed-height row boxes so MultiCell wraps never break borders
@@ -948,14 +949,14 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 			pdf.Ln(8)
 		}
 
-		writeReportParagraph(reportData.LimeToneNotes, 5)
+		writeReportParagraph(reportData.LimeToneNotes, 7)
 
 		// SECTION 3 always starts on a new page
 		pdf.AddPage()
 		writeSectionHeading("SECTION 3: OPINION OF EXAMINER")
 
-		writeReportParagraph(reportData.OpinionPhaseText, 3)
-		writeReportParagraph(reportData.PostTestNotes, 5)
+		writeReportParagraph(reportData.OpinionPhaseText, 7)
+		writeReportParagraph(reportData.PostTestNotes, 7)
 
 		// Result badge
 		pdf.SetFont("Helvetica", "B", 10)
@@ -973,12 +974,12 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		}
 		pdf.Cell(0, 6, resultLabel)
 		pdf.SetTextColor(0, 0, 0)
-		pdf.Ln(8)
+		pdf.Ln(10)
 
 		// SECTION 4: FOLLOW-UP BY REQUESTING AGENCY
 		writeSectionHeading("SECTION 4: FOLLOW-UP BY REQUESTING AGENCY")
 
-		writeReportParagraph(reportData.Section4FollowUp, 0)
+		writeReportParagraph(reportData.Section4FollowUp, 7)
 
 	} else {
 		// Fallback for unstructured text
