@@ -321,18 +321,18 @@ func (s *Service) FinalizeReport(examID uint, actorID uint, actorEmail string, e
 			Model(&ExamReport{}).
 			Where("id = ?", report.ID).
 			Updates(map[string]any{
-				"is_locked":            true,
-				"locked_at":            &now,
-				"signature_examiner":   signature,
-				"signature_image":      examiner.SignatureImage,
-				"signer_examiner_id":   examiner.ID,
-				"signer_name":          displayName,
-				"signer_title":         examiner.SignatureTitle,
-				"signer_organization":  examiner.SignatureOrganization,
-				"signer_caption":       caption,
-				"credentials_text":     credentialsText,
-				"include_credentials":  includeCredentials,
-				"signed_at":            &now,
+				"is_locked":           true,
+				"locked_at":           &now,
+				"signature_examiner":  signature,
+				"signature_image":     examiner.SignatureImage,
+				"signer_examiner_id":  examiner.ID,
+				"signer_name":         displayName,
+				"signer_title":        examiner.SignatureTitle,
+				"signer_organization": examiner.SignatureOrganization,
+				"signer_caption":      caption,
+				"credentials_text":    credentialsText,
+				"include_credentials": includeCredentials,
+				"signed_at":           &now,
 			}).Error; err != nil {
 			return err
 		}
@@ -626,29 +626,31 @@ type StructuredReportQuestion struct {
 }
 
 type StructuredReport struct {
-	Purpose                    string `json:"purpose"`
-	Instrument                 string `json:"instrument"`
-	PreTestNotes               string `json:"pre_test_notes"`
-	Questions                  []StructuredReportQuestion `json:"questions"`
-	PostTestNotes              string `json:"post_test_notes"`
-	Conclusion                 string `json:"conclusion,omitempty"` // legacy; not rendered in PDF
-	ReferenceNo                string `json:"reference_no"`
-	ExamDate                   string `json:"exam_date"`
-	ReportDate                 string `json:"report_date"`
-	Section4FollowUp           string `json:"section_4_follow_up"`
-	LimeToneNotes              string `json:"limestone_notes"`
-	PreTestPhaseText           string `json:"pre_test_phase_text"`
-	ExamPhaseText              string `json:"exam_phase_text"`
-	OpinionPhaseText           string `json:"opinion_phase_text"`
-	IdentityDocumentType       string `json:"identity_document_type,omitempty"`
-	IdentityVerificationText   string `json:"identity_verification_text,omitempty"`
-	ExamStartTime              string `json:"exam_start_time,omitempty"`
-	ExamEndTime                string `json:"exam_end_time,omitempty"`
-	CooperationMode            string `json:"cooperation_mode,omitempty"`
-	PreExamQuestionCountText   string `json:"pre_exam_question_count_text,omitempty"`
-	ResponseLegendText         string `json:"response_legend_text,omitempty"`
-	EnableColorCoding          bool   `json:"enable_color_coding,omitempty"`
-	SourceTemplateID           uint   `json:"source_template_id,omitempty"`
+	Purpose                     string                     `json:"purpose"`
+	Instrument                  string                     `json:"instrument"`
+	PreTestNotes                string                     `json:"pre_test_notes"`
+	Questions                   []StructuredReportQuestion `json:"questions"`
+	PostTestNotes               string                     `json:"post_test_notes"`
+	Conclusion                  string                     `json:"conclusion,omitempty"` // legacy; not rendered in PDF
+	ReferenceNo                 string                     `json:"reference_no"`
+	ExamDate                    string                     `json:"exam_date"`
+	ReportDate                  string                     `json:"report_date"`
+	Section4FollowUp            string                     `json:"section_4_follow_up"`
+	LimeToneNotes               string                     `json:"limestone_notes"`
+	PreTestPhaseText            string                     `json:"pre_test_phase_text"`
+	ExamPhaseText               string                     `json:"exam_phase_text"`
+	OpinionPhaseText            string                     `json:"opinion_phase_text"`
+	ExaminersObservationEnabled bool                       `json:"examiners_observation_enabled,omitempty"`
+	ExaminersObservationText    string                     `json:"examiners_observation_text,omitempty"`
+	IdentityDocumentType        string                     `json:"identity_document_type,omitempty"`
+	IdentityVerificationText    string                     `json:"identity_verification_text,omitempty"`
+	ExamStartTime               string                     `json:"exam_start_time,omitempty"`
+	ExamEndTime                 string                     `json:"exam_end_time,omitempty"`
+	CooperationMode             string                     `json:"cooperation_mode,omitempty"`
+	PreExamQuestionCountText    string                     `json:"pre_exam_question_count_text,omitempty"`
+	ResponseLegendText          string                     `json:"response_legend_text,omitempty"`
+	EnableColorCoding           bool                       `json:"enable_color_coding,omitempty"`
+	SourceTemplateID            uint                       `json:"source_template_id,omitempty"`
 }
 
 type PDFSigner struct {
@@ -956,6 +958,12 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		writeSectionHeading("SECTION 3: OPINION OF EXAMINER")
 
 		writeReportParagraph(reportData.OpinionPhaseText, 7)
+		if reportData.ExaminersObservationEnabled {
+			writeSectionHeading("EXAMINER'S OBSERVATION")
+			pdf.SetTextColor(37, 99, 235)
+			writeReportParagraph(reportData.ExaminersObservationText, 7)
+			pdf.SetTextColor(0, 0, 0)
+		}
 		writeReportParagraph(reportData.PostTestNotes, 7)
 
 		// Result badge
