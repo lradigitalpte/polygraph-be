@@ -107,6 +107,7 @@ func main() {
 		&appointments.Quotation{},
 		&availability.Block{},
 		&exams.ExamType{},
+		&exams.QuestionTemplate{},
 		&exams.Exam{},
 		&exams.ExamQuestion{},
 		&exams.ExamReport{},

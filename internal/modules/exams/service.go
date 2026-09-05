@@ -497,6 +497,7 @@ func (s *Service) GetExamByID(id string) (*Exam, error) {
 		Preload("ExamType").
 		Preload("Documents").
 		Preload("Phases").
+		Preload("Questions").
 		First(&exam, id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -516,6 +517,7 @@ func (s *Service) GetExamByAppointmentID(appointmentID string) (*Exam, error) {
 		Preload("ExamType").
 		Preload("Documents").
 		Preload("Phases").
+		Preload("Questions").
 		First(&exam).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

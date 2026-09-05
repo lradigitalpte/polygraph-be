@@ -52,7 +52,25 @@ type ExamQuestion struct {
 	ID       uint   `gorm:"primarykey" json:"id"`
 	ExamID   uint   `json:"exam_id"`
 	Text     string `gorm:"type:text;not null" json:"text"`
-	Response string `gorm:"size:50" json:"response"` // Truthful, Deceptive, Inconclusive
+	Category string `gorm:"size:30" json:"category,omitempty"` // relevant, comparison, irrelevant
+	Response string `gorm:"size:50" json:"response"`            // Truthful, Deceptive, Inconclusive
+}
+
+// QuestionTemplate is a reusable question preset scoped to an exam type, managed
+// from the Question Library settings page. Session prep copies (and merge-field
+// resolves) its Text into ExamQuestion rows rather than referencing it live, so
+// later edits here never retroactively change a past exam's record.
+type QuestionTemplate struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+	ExamTypeID uint           `gorm:"not null;index" json:"exam_type_id"`
+	ExamType   *ExamType      `gorm:"foreignKey:ExamTypeID" json:"exam_type,omitempty"`
+	Category   string         `gorm:"size:30;not null" json:"category"` // relevant, comparison, irrelevant
+	Text       string         `gorm:"type:text;not null" json:"text"`
+	SortOrder  int            `gorm:"default:0" json:"sort_order"`
+	Active     bool           `gorm:"default:true" json:"active"`
 }
 
 // ExamReport is the final forensic verdict

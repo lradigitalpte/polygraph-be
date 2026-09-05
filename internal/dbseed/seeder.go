@@ -48,6 +48,8 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 		{Name: "examtype:delete", Description: "Can delete exam types", Group: "Exams"},
 		{Name: "report_template:view", Description: "Can view report templates", Group: "Exams"},
 		{Name: "report_template:manage", Description: "Can manage report templates", Group: "Exams"},
+		{Name: "question_template:view", Description: "Can view question library templates", Group: "Exams"},
+		{Name: "question_template:manage", Description: "Can manage question library templates", Group: "Exams"},
 
 		// Availability Management
 		{Name: "availability:view", Description: "Can view examiner availability blocks", Group: "Availability"},

@@ -36,11 +36,14 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&rbac.Role{},
 		&auth.User{},
 		&subjects.Subject{},
+		&ExamType{},
+		&QuestionTemplate{},
 		&Exam{},
 		&ExamQuestion{},
 		&ExamReport{},
 		&SecureReportShare{},
 		&appointmentLink{},
+		&testClient{},
 		&Document{},
 		&CaseReferral{},
 		&ClinicalAssessment{},
@@ -51,6 +54,16 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 	return db
 }
+
+// testClient is a minimal stand-in for the appointments.Client table so
+// mergeContextForExam's raw "clients" table lookup resolves in tests without
+// pulling in the appointments package (which would create an import cycle).
+type testClient struct {
+	ID   uint `gorm:"primarykey"`
+	Name string
+}
+
+func (testClient) TableName() string { return "clients" }
 
 func TestService_ConsolidatedStatsCountsEachFinalVerdictIndependently(t *testing.T) {
 	db := setupTestDB(t)
