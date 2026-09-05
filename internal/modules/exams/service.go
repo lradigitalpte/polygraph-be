@@ -466,14 +466,16 @@ func (s *Service) GetIntelligence(examID string) (*Exam, error) {
 }
 
 type appointmentLink struct {
-	ID          uint `gorm:"primarykey"`
-	ClientID    uint
-	SubjectID   uint
-	ExaminerID  uint
-	ScheduledAt time.Time
-	ExamID      *uint
-	Status      string
-	Notes       string `gorm:"type:text"`
+	ID                uint `gorm:"primarykey"`
+	ClientID          uint
+	SubjectID         uint
+	ExaminerID        uint
+	ScheduledAt       time.Time
+	ExamID            *uint
+	ExamTypeID        *uint
+	QuestionsPrepared bool
+	Status            string
+	Notes             string `gorm:"type:text"`
 }
 
 func (appointmentLink) TableName() string { return "appointments" }
@@ -601,20 +603,52 @@ func (s *Service) StartDocumentationForAppointment(appointmentID string) (*Exam,
 	}
 
 	apptID := appt.ID
+	examTypeName := "Polygraph examination"
+	if appt.ExamTypeID != nil && *appt.ExamTypeID > 0 {
+		var examType ExamType
+		if err := s.db.First(&examType, *appt.ExamTypeID).Error; err == nil && strings.TrimSpace(examType.Name) != "" {
+			examTypeName = examType.Name
+		}
+	}
 	exam := Exam{
 		ClientID:      appt.ClientID,
 		SubjectID:     appt.SubjectID,
 		ExaminerID:    appt.ExaminerID,
 		AppointmentID: &apptID,
 		Date:          appt.ScheduledAt,
+		ExamTypeID:    appt.ExamTypeID,
 		Status:        "in_progress",
-		Type:          "Polygraph examination",
+		Type:          examTypeName,
 		Notes:         appt.Notes,
 	}
-	if err := s.db.Create(&exam).Error; err != nil {
-		return nil, err
-	}
-	if err := s.db.Model(&appointmentLink{}).Where("id = ?", appt.ID).Update("exam_id", exam.ID).Error; err != nil {
+
+	// Create the exam, carry over any questions prepared at booking, and claim the
+	// appointment in one transaction so a session can never start half-populated.
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&exam).Error; err != nil {
+			return err
+		}
+
+		var prepared []AppointmentQuestion
+		if err := tx.Where("appointment_id = ?", appt.ID).
+			Order("sort_order ASC, id ASC").
+			Find(&prepared).Error; err != nil {
+			return err
+		}
+		for i, q := range prepared {
+			question := ExamQuestion{
+				ExamID:    exam.ID,
+				Text:      q.Text,
+				Category:  q.Category,
+				SortOrder: i,
+			}
+			if err := tx.Create(&question).Error; err != nil {
+				return err
+			}
+		}
+
+		return tx.Model(&appointmentLink{}).Where("id = ?", appt.ID).Update("exam_id", exam.ID).Error
+	}); err != nil {
 		return nil, err
 	}
 

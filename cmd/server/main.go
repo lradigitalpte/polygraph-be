@@ -110,6 +110,7 @@ func main() {
 		&exams.QuestionTemplate{},
 		&exams.Exam{},
 		&exams.ExamQuestion{},
+		&exams.AppointmentQuestion{},
 		&exams.ExamReport{},
 		&exams.Document{},
 		&exams.CaseReferral{},
@@ -136,6 +137,15 @@ func main() {
 			logger.Warn("Failed to drop legacy subject id_number unique index", zap.Error(dropErr))
 		} else {
 			logger.Info("Dropped legacy subject id_number unique index")
+		}
+	}
+
+	// Question templates were originally required to belong to an exam type; the
+	// exam type is now an optional filter tag. AutoMigrate will not relax an
+	// existing NOT NULL, so do it explicitly (no-op where already nullable).
+	if db.Migrator().HasColumn(&exams.QuestionTemplate{}, "exam_type_id") {
+		if alterErr := db.Exec("ALTER TABLE question_templates ALTER COLUMN exam_type_id DROP NOT NULL").Error; alterErr != nil {
+			logger.Debug("question_templates.exam_type_id already nullable or not alterable", zap.Error(alterErr))
 		}
 	}
 

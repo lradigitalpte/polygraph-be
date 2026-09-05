@@ -85,15 +85,22 @@ func (ctrl *Controller) DeleteExamQuestion(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-func (ctrl *Controller) PopulateDefaultQuestions(c *gin.Context) {
+func (ctrl *Controller) AddExamQuestionsFromTemplates(c *gin.Context) {
 	examID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid exam id"})
 		return
 	}
-	questions, err := ctrl.service.PopulateDefaultQuestions(uint(examID))
+	var body struct {
+		TemplateIDs []uint `json:"template_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	questions, err := ctrl.service.AddExamQuestionsFromTemplates(uint(examID), body.TemplateIDs)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, questions)

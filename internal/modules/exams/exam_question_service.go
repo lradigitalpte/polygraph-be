@@ -9,7 +9,7 @@ import (
 
 func (s *Service) ListExamQuestions(examID uint) ([]ExamQuestion, error) {
 	var questions []ExamQuestion
-	if err := s.db.Where("exam_id = ?", examID).Order("id ASC").Find(&questions).Error; err != nil {
+	if err := s.db.Where("exam_id = ?", examID).Order("sort_order ASC, id ASC").Find(&questions).Error; err != nil {
 		return nil, err
 	}
 	return questions, nil
@@ -45,7 +45,11 @@ func (s *Service) CreateExamQuestion(examID uint, text, category string) (*ExamQ
 	if locked {
 		return nil, errors.New("cannot modify questions on a locked forensic report")
 	}
-	question := ExamQuestion{ExamID: examID, Text: text, Category: category}
+	sortOrder, err := s.nextExamQuestionSortOrder(examID)
+	if err != nil {
+		return nil, err
+	}
+	question := ExamQuestion{ExamID: examID, Text: text, Category: category, SortOrder: sortOrder}
 	if err := s.db.Create(&question).Error; err != nil {
 		return nil, err
 	}
@@ -53,9 +57,10 @@ func (s *Service) CreateExamQuestion(examID uint, text, category string) (*ExamQ
 }
 
 type ExamQuestionUpdate struct {
-	Text     *string `json:"text"`
-	Category *string `json:"category"`
-	Response *string `json:"response"`
+	Text      *string `json:"text"`
+	Category  *string `json:"category"`
+	Response  *string `json:"response"`
+	SortOrder *int    `json:"sort_order"`
 }
 
 func (s *Service) UpdateExamQuestion(examID, questionID uint, input ExamQuestionUpdate) (*ExamQuestion, error) {
@@ -89,6 +94,9 @@ func (s *Service) UpdateExamQuestion(examID, questionID uint, input ExamQuestion
 	if input.Response != nil {
 		updates["response"] = strings.TrimSpace(*input.Response)
 	}
+	if input.SortOrder != nil {
+		updates["sort_order"] = *input.SortOrder
+	}
 	if len(updates) == 0 {
 		return &question, nil
 	}
@@ -113,44 +121,47 @@ func (s *Service) DeleteExamQuestion(examID, questionID uint) error {
 	return s.db.Delete(&question).Error
 }
 
-// PopulateDefaultQuestions copies the exam's exam-type default question
-// templates onto the exam, merge-field resolving each one's text. It refuses
-// to run if the exam already has questions, so an examiner never loses
-// session-specific edits by re-populating.
-func (s *Service) PopulateDefaultQuestions(examID uint) ([]ExamQuestion, error) {
+// AddExamQuestionsFromTemplates appends library questions to an exam that is
+// already underway, merge-resolving each template's placeholders.
+func (s *Service) AddExamQuestionsFromTemplates(examID uint, templateIDs []uint) ([]ExamQuestion, error) {
+	if len(templateIDs) == 0 {
+		return nil, errors.New("no templates selected")
+	}
+	locked, err := s.isReportLocked(examID)
+	if err != nil {
+		return nil, err
+	}
+	if locked {
+		return nil, errors.New("cannot modify questions on a locked forensic report")
+	}
+
 	var exam Exam
 	if err := s.db.Preload("Subject").First(&exam, examID).Error; err != nil {
 		return nil, errors.New("exam not found")
 	}
-	if exam.ExamTypeID == nil || *exam.ExamTypeID == 0 {
-		return nil, errors.New("exam has no exam type set")
-	}
 
-	var existingCount int64
-	if err := s.db.Model(&ExamQuestion{}).Where("exam_id = ?", examID).Count(&existingCount).Error; err != nil {
-		return nil, err
-	}
-	if existingCount > 0 {
-		return nil, errors.New("exam already has questions; clear or edit them individually instead of repopulating")
-	}
-
-	templates, err := s.ListQuestionTemplates(exam.ExamTypeID, false)
-	if err != nil {
+	var templates []QuestionTemplate
+	if err := s.db.Where("id IN ?", templateIDs).Order("sort_order ASC, id ASC").Find(&templates).Error; err != nil {
 		return nil, err
 	}
 	if len(templates) == 0 {
-		return nil, errors.New("no question templates found for this exam type")
+		return nil, errors.New("no matching question templates found")
 	}
 
+	nextOrder, err := s.nextExamQuestionSortOrder(examID)
+	if err != nil {
+		return nil, err
+	}
 	ctx := s.mergeContextForExam(&exam)
 
 	var created []ExamQuestion
 	txErr := s.db.Transaction(func(tx *gorm.DB) error {
-		for _, tpl := range templates {
+		for i, tpl := range templates {
 			question := ExamQuestion{
-				ExamID:   examID,
-				Text:     mergeTemplatePlaceholders(tpl.Text, ctx),
-				Category: tpl.Category,
+				ExamID:    examID,
+				Text:      mergeTemplatePlaceholders(tpl.Text, ctx),
+				Category:  tpl.Category,
+				SortOrder: nextOrder + i,
 			}
 			if err := tx.Create(&question).Error; err != nil {
 				return err
@@ -163,6 +174,20 @@ func (s *Service) PopulateDefaultQuestions(examID uint) ([]ExamQuestion, error) 
 		return nil, txErr
 	}
 	return created, nil
+}
+
+func (s *Service) nextExamQuestionSortOrder(examID uint) (int, error) {
+	var result struct{ Max *int }
+	if err := s.db.Model(&ExamQuestion{}).
+		Select("MAX(sort_order) AS max").
+		Where("exam_id = ?", examID).
+		Scan(&result).Error; err != nil {
+		return 0, err
+	}
+	if result.Max == nil {
+		return 0, nil
+	}
+	return *result.Max + 1, nil
 }
 
 // mergeContextForExam builds a ReportMergeContext from an exam record so

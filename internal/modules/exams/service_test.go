@@ -40,6 +40,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&QuestionTemplate{},
 		&Exam{},
 		&ExamQuestion{},
+		&AppointmentQuestion{},
 		&ExamReport{},
 		&SecureReportShare{},
 		&appointmentLink{},

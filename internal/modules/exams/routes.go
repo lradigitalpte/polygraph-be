@@ -27,10 +27,26 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		e.POST("/:id/questions", permissionMiddleware("exam:conduct"), ctrl.CreateExamQuestion)
 		e.PATCH("/:id/questions/:qid", permissionMiddleware("exam:conduct"), ctrl.UpdateExamQuestion)
 		e.DELETE("/:id/questions/:qid", permissionMiddleware("exam:conduct"), ctrl.DeleteExamQuestion)
-		e.POST("/:id/questions/populate-defaults", permissionMiddleware("exam:conduct"), ctrl.PopulateDefaultQuestions)
+		e.POST("/:id/questions/from-templates", permissionMiddleware("exam:conduct"), ctrl.AddExamQuestionsFromTemplates)
 		e.POST("/referral", permissionMiddleware("client:manage"), ctrl.CreateReferral)
 		e.POST("/assessment", permissionMiddleware("exam:conduct"), ctrl.CreateAssessment)
 		e.POST("/phase", permissionMiddleware("exam:conduct"), ctrl.AddPhase)
+	}
+
+	// Questions prepared for a booking before its examination record exists.
+	// Mounted here (not in the appointments module) because the question
+	// machinery lives in this package; appointments already imports exams, so the
+	// dependency must not run the other way. The path param is ":id" to match the
+	// appointments module's own /appointments/:id routes.
+	//
+	// Writes use appointment:create rather than appointment:manage: examiners hold
+	// appointment:create by default but not appointment:manage, and preparing
+	// questions is part of setting up a booking.
+	aq := router.Group("/appointments")
+	{
+		aq.GET("/:id/questions", permissionMiddleware("appointment:view"), ctrl.ListAppointmentQuestions)
+		aq.PUT("/:id/questions", permissionMiddleware("appointment:create"), ctrl.ReplaceAppointmentQuestions)
+		aq.POST("/:id/questions/from-templates", permissionMiddleware("appointment:create"), ctrl.AddAppointmentQuestionsFromTemplates)
 	}
 
 	r := router.Group("/reports")

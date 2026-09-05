@@ -49,23 +49,36 @@ type Exam struct {
 
 // ExamQuestion tracks questions asked during a session
 type ExamQuestion struct {
-	ID       uint   `gorm:"primarykey" json:"id"`
-	ExamID   uint   `json:"exam_id"`
-	Text     string `gorm:"type:text;not null" json:"text"`
-	Category string `gorm:"size:30" json:"category,omitempty"` // relevant, comparison, irrelevant
-	Response string `gorm:"size:50" json:"response"`            // Truthful, Deceptive, Inconclusive
+	ID        uint   `gorm:"primarykey" json:"id"`
+	ExamID    uint   `json:"exam_id"`
+	Text      string `gorm:"type:text;not null" json:"text"`
+	Category  string `gorm:"size:30" json:"category,omitempty"` // relevant, comparison, irrelevant
+	SortOrder int    `gorm:"default:0" json:"sort_order"`
+	Response  string `gorm:"size:50" json:"response"` // Truthful, Deceptive, Inconclusive
 }
 
-// QuestionTemplate is a reusable question preset scoped to an exam type, managed
-// from the Question Library settings page. Session prep copies (and merge-field
-// resolves) its Text into ExamQuestion rows rather than referencing it live, so
-// later edits here never retroactively change a past exam's record.
+// AppointmentQuestion holds the questions prepared for a booking before its
+// examination record exists. When documentation starts they are copied into
+// ExamQuestion rows and these become frozen history.
+type AppointmentQuestion struct {
+	ID            uint   `gorm:"primarykey" json:"id"`
+	AppointmentID uint   `gorm:"index;not null" json:"appointment_id"`
+	Text          string `gorm:"type:text;not null" json:"text"`
+	Category      string `gorm:"size:30" json:"category,omitempty"` // relevant, comparison, irrelevant
+	SortOrder     int    `gorm:"default:0" json:"sort_order"`
+}
+
+// QuestionTemplate is a reusable question preset managed from the Question
+// Library settings page. ExamTypeID is an optional tag used only to filter the
+// picker — an untagged template is offered for every booking. Prepared
+// questions copy (and merge-field resolve) its Text rather than referencing it
+// live, so later edits here never retroactively change a past session.
 type QuestionTemplate struct {
 	ID         uint           `gorm:"primarykey" json:"id"`
 	CreatedAt  time.Time      `json:"created_at"`
 	UpdatedAt  time.Time      `json:"updated_at"`
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
-	ExamTypeID uint           `gorm:"not null;index" json:"exam_type_id"`
+	ExamTypeID *uint          `gorm:"index" json:"exam_type_id,omitempty"`
 	ExamType   *ExamType      `gorm:"foreignKey:ExamTypeID" json:"exam_type,omitempty"`
 	Category   string         `gorm:"size:30;not null" json:"category"` // relevant, comparison, irrelevant
 	Text       string         `gorm:"type:text;not null" json:"text"`

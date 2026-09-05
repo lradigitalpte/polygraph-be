@@ -552,6 +552,7 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 	allowed := map[string]bool{
 		"notes": true, "status": true, "questions_prepared": true, "exam_id": true,
 		"scheduled_at": true, "duration": true, "examiner_id": true, "exam_fee": true,
+		"exam_type_id": true,
 	}
 	safe := make(map[string]interface{})
 	for key, value := range updates {
@@ -1328,6 +1329,7 @@ type ConvertQuotationInput struct {
 	ExaminerID  uint      `json:"examiner_id"`
 	ScheduledAt time.Time `json:"scheduled_at"`
 	Duration    int       `json:"duration"`
+	ExamTypeID  *uint     `json:"exam_type_id"`
 }
 
 // ConvertQuotationToAppointment turns a standalone quotation into a booked
@@ -1356,6 +1358,7 @@ func (s *Service) ConvertQuotationToAppointment(quotationID string, in ConvertQu
 		ExaminerID:      in.ExaminerID,
 		ScheduledAt:     in.ScheduledAt,
 		Duration:        in.Duration,
+		ExamTypeID:      in.ExamTypeID,
 		ExamFee:         quote.Amount,
 		FeeCurrency:     strings.ToUpper(strings.TrimSpace(quote.Currency)),
 		CollectedAmount: quote.CollectedAmount,

@@ -61,7 +61,7 @@ func (ctrl *Controller) UpdateQuestionTemplate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid template id"})
 		return
 	}
-	var input QuestionTemplateInput
+	var input QuestionTemplateUpdate
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
