@@ -9,6 +9,7 @@ type OrganizationSettings struct {
 	UpdatedAt             time.Time `json:"updated_at"`
 	Name                  string    `gorm:"size:255;not null" json:"name"`
 	SupportEmail          string    `gorm:"size:255" json:"support_email"`
+	Phone                 string    `gorm:"size:50" json:"phone"`
 	Address               string    `gorm:"size:500" json:"address"`
 	Currency              string    `gorm:"size:10;default:'AED'" json:"currency"`
 	UsdAedRate            float64   `gorm:"default:3.6725" json:"usd_aed_rate"`

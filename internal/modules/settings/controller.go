@@ -25,6 +25,23 @@ func (ctrl *Controller) GetOrganization(c *gin.Context) {
 	c.JSON(http.StatusOK, row)
 }
 
+// GetPublicOrganization returns only the contact details that are safe to show on
+// unauthenticated surfaces (the public booking site, emailed quotations, etc.) —
+// never the currency/exchange-rate fields.
+func (ctrl *Controller) GetPublicOrganization(c *gin.Context) {
+	row, err := ctrl.service.GetOrganization()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load organization settings"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"name":          row.Name,
+		"phone":         row.Phone,
+		"support_email": row.SupportEmail,
+		"address":       row.Address,
+	})
+}
+
 func (ctrl *Controller) UpdateOrganization(c *gin.Context) {
 	var input UpdateOrganizationInput
 	if err := c.ShouldBindJSON(&input); err != nil {

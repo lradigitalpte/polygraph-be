@@ -1297,6 +1297,21 @@ func sendSMTPMail(toEmail string, subject string, body string) error {
 	return email.Send(toEmail, subject, body)
 }
 
+// ApproveQuotation marks a quotation as approved by the client — a status step
+// between "Sent" and payment collection so the team knows sign-off happened
+// before money is recorded against it.
+func (s *Service) ApproveQuotation(id string) error {
+	var quote Quotation
+	if err := s.db.First(&quote, id).Error; err != nil {
+		return errors.New("quotation not found")
+	}
+	if strings.EqualFold(quote.Status, "Completed") {
+		return errors.New("quotation is already fully paid")
+	}
+
+	return s.db.Model(&Quotation{}).Where("id = ?", id).Update("status", "Approved").Error
+}
+
 func (s *Service) CollectQuotationPayment(id string, amount float64) error {
 	if amount <= 0 {
 		return errors.New("amount must be greater than zero")

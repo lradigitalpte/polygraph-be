@@ -28,6 +28,7 @@ type Service struct {
 type UpdateOrganizationInput struct {
 	Name                  string   `json:"name"`
 	SupportEmail          string   `json:"support_email"`
+	Phone                 string   `json:"phone"`
 	Address               string   `json:"address"`
 	Currency              string   `json:"currency"`
 	UsdAedRate            *float64 `json:"usd_aed_rate"`
@@ -82,6 +83,7 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 	updates := map[string]interface{}{
 		"name":          name,
 		"support_email": strings.TrimSpace(input.SupportEmail),
+		"phone":         strings.TrimSpace(input.Phone),
 		"address":       strings.TrimSpace(input.Address),
 		"currency":      currency,
 	}

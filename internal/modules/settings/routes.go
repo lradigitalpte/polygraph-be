@@ -10,3 +10,10 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		org.DELETE("", permissionMiddleware("role:manage"), ctrl.DeleteOrganization)
 	}
 }
+
+// RegisterPublicRoutes mounts the unauthenticated organization-contact endpoint used
+// by the public marketing/booking site. The caller passes the already-"/api/public"
+// group, so this group must be just "/organization" (not "/public/organization").
+func RegisterPublicRoutes(router *gin.RouterGroup, ctrl *Controller) {
+	router.GET("/organization", ctrl.GetPublicOrganization)
+}

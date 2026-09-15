@@ -787,6 +787,22 @@ func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Quotation marked as emailed"})
 }
 
+// ApproveQuotation godoc
+// @Summary Approve a quotation
+// @Tags business
+// @Produce json
+// @Param id path int true "Quotation ID"
+// @Success 200 {object} map[string]string
+// @Router /api/quotations/{id}/approve [patch]
+func (ctrl *Controller) ApproveQuotation(c *gin.Context) {
+	id := c.Param("id")
+	if err := ctrl.service.ApproveQuotation(id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Quotation approved"})
+}
+
 // CollectQuotationPayment godoc
 // @Summary Collect quotation payment
 // @Tags business

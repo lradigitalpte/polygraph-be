@@ -279,6 +279,7 @@ func main() {
 	// Public document-view links (clients open these to download files sent to them).
 	appointments.RegisterPublicRoutes(publicAPI, appCtrl)
 	exams.RegisterPublicRoutes(publicAPI, examCtrl)
+	settings.RegisterPublicRoutes(publicAPI, settingsCtrl)
 
 	// Cron endpoint (no session auth; guarded by the X-Cron-Secret header inside
 	// the handler). Hit on a schedule by an external scheduler (cron-job.org) to
