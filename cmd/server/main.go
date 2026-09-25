@@ -36,6 +36,7 @@ import (
 	"my-app/internal/dbseed"
 	"my-app/internal/middleware"
 	"my-app/internal/models"
+	"my-app/internal/modules/agreements"
 	"my-app/internal/modules/appointments"
 	"my-app/internal/modules/auditlogs"
 	"my-app/internal/modules/auth"
@@ -119,6 +120,9 @@ func main() {
 		&leads.Lead{},
 		&forms.FormTemplate{},
 		&forms.FormRequest{},
+		&agreements.AgreementTemplate{},
+		&agreements.AgreementRequest{},
+		&agreements.AgreementRequestItem{},
 		&intake.IntakeRequest{},
 		&settings.OrganizationSettings{},
 		&inventory.InventoryItem{},
@@ -152,6 +156,7 @@ func main() {
 	// Seed database with roles and permissions
 	dbseed.SeedDatabase(db, logger)
 	forms.SeedTemplates(db)
+	agreements.SeedTemplates(db)
 	exams.SeedReportTemplates(db)
 
 	// Auth: better-auth session tokens are validated against the shared session table
@@ -262,6 +267,9 @@ func main() {
 	formsService := forms.NewService()
 	formsCtrl := forms.NewController(formsService)
 
+	agreementsService := agreements.NewService(fileStorage)
+	agreementsCtrl := agreements.NewController(agreementsService)
+
 	inventoryService := inventory.NewService()
 	inventoryCtrl := inventory.NewController(inventoryService)
 
@@ -280,6 +288,7 @@ func main() {
 	appointments.RegisterPublicRoutes(publicAPI, appCtrl)
 	exams.RegisterPublicRoutes(publicAPI, examCtrl)
 	settings.RegisterPublicRoutes(publicAPI, settingsCtrl)
+	agreements.RegisterPublicRoutes(publicAPI, agreementsCtrl)
 
 	// Cron endpoint (no session auth; guarded by the X-Cron-Secret header inside
 	// the handler). Hit on a schedule by an external scheduler (cron-job.org) to
@@ -303,6 +312,7 @@ func main() {
 		leads.RegisterRoutes(api, leadCtrl, middleware.PermissionMiddleware)
 		auditlogs.RegisterRoutes(api, auditCtrl, middleware.PermissionMiddleware)
 		forms.RegisterRoutes(api, formsCtrl, middleware.PermissionMiddleware)
+		agreements.RegisterRoutes(api, agreementsCtrl, middleware.PermissionMiddleware)
 		intake.RegisterRoutes(api, intakeCtrl, middleware.PermissionMiddleware)
 		inventory.RegisterRoutes(api, inventoryCtrl, middleware.PermissionMiddleware)
 	}

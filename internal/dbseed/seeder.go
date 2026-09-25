@@ -74,6 +74,11 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 
 		// Reminders
 		{Name: "reminder:view", Description: "Can view and send reminders", Group: "Reminders"},
+
+		// Client Agreements
+		{Name: "agreement:view", Description: "Can view agreements and client approvals", Group: "Agreements"},
+		{Name: "agreement:send", Description: "Can send, resend and void client agreements", Group: "Agreements"},
+		{Name: "agreement:manage", Description: "Can edit agreement terms in settings", Group: "Agreements"},
 	}
 
 	for _, p := range perms {

@@ -35,6 +35,9 @@ type UpdateOrganizationInput struct {
 	UsdGbpRate            *float64 `json:"usd_gbp_rate"`
 	UsdEurRate            *float64 `json:"usd_eur_rate"`
 	SundayBookingsEnabled *bool    `json:"sunday_bookings_enabled"`
+	Website               *string  `json:"website"`
+	// LogoDataURL: nil leaves the logo unchanged, "" removes it.
+	LogoDataURL *string `json:"logo_data_url"`
 }
 
 func NewService() *Service {
@@ -99,6 +102,20 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 	if input.SundayBookingsEnabled != nil {
 		updates["sunday_bookings_enabled"] = *input.SundayBookingsEnabled
 	}
+	if input.Website != nil {
+		website, err := normalizeWebsite(*input.Website)
+		if err != nil {
+			return nil, err
+		}
+		updates["website"] = website
+	}
+	if input.LogoDataURL != nil {
+		logo := strings.TrimSpace(*input.LogoDataURL)
+		if err := validateLogoDataURL(logo); err != nil {
+			return nil, err
+		}
+		updates["logo_data_url"] = logo
+	}
 	if err := s.db.Model(row).Updates(updates).Error; err != nil {
 		return nil, err
 	}
@@ -125,6 +142,17 @@ func (s *Service) DeleteOrganizationData() error {
 				Where(fk.column+" IS NOT NULL").
 				Update(fk.column, nil).Error; err != nil {
 				return err
+			}
+		}
+
+		// Signed/sent client agreements reference clients and appointments. Deleted by table
+		// name because the agreements package imports settings (for branding). Agreement
+		// templates are configuration and are kept, like exam types.
+		for _, table := range []string{"agreement_request_items", "agreement_requests"} {
+			if tx.Migrator().HasTable(table) {
+				if err := tx.Exec("DELETE FROM " + table).Error; err != nil {
+					return err
+				}
 			}
 		}
 
