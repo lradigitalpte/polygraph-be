@@ -2,12 +2,9 @@ package payments
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -66,9 +63,38 @@ func (ctrl *Controller) HandleWebhook(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid event payload"})
 			return
 		}
-		if err := ctrl.applyCheckoutSession(&sess); err != nil {
+		if err := ctrl.applyCheckoutSessionID(sess.ID, &sess); err != nil {
 			ctrl.logger.Error("failed to apply stripe checkout payment",
 				zap.String("session_id", sess.ID),
+				zap.String("event_type", string(event.Type)),
+				zap.Error(err),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	case "payment_intent.succeeded":
+		var pi stripe.PaymentIntent
+		if err := json.Unmarshal(event.Data.Raw, &pi); err != nil {
+			ctrl.logger.Error("failed to parse payment intent", zap.Error(err))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid event payload"})
+			return
+		}
+		details, err := stripeutil.ParsePaymentIntentPayment(&pi)
+		if err != nil {
+			ctrl.logger.Info("ignoring payment_intent.succeeded",
+				zap.String("payment_intent_id", pi.ID),
+				zap.Error(err),
+			)
+			break
+		}
+		if err := ctrl.appointments.ApplyStripeCheckoutPayment(
+			details.QuotationID,
+			details.Amount,
+			details.SessionID,
+			details.PaymentIntentID,
+		); err != nil {
+			ctrl.logger.Error("failed to apply stripe payment intent",
+				zap.String("payment_intent_id", pi.ID),
 				zap.Error(err),
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -81,55 +107,39 @@ func (ctrl *Controller) HandleWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"received": true})
 }
 
-func (ctrl *Controller) applyCheckoutSession(sess *stripe.CheckoutSession) error {
-	if sess == nil || sess.ID == "" {
-		return errors.New("missing checkout session")
+func (ctrl *Controller) applyCheckoutSessionID(sessionID string, fallback *stripe.CheckoutSession) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
 	}
-	if sess.PaymentStatus != stripe.CheckoutSessionPaymentStatusPaid &&
-		sess.PaymentStatus != stripe.CheckoutSessionPaymentStatusNoPaymentRequired {
-		ctrl.logger.Info("ignoring unpaid checkout session",
-			zap.String("session_id", sess.ID),
-			zap.String("payment_status", string(sess.PaymentStatus)),
+
+	sess, err := stripeutil.RetrieveCheckoutSession(sessionID)
+	if err != nil {
+		ctrl.logger.Warn("stripe session retrieve failed, using webhook payload",
+			zap.String("session_id", sessionID),
+			zap.Error(err),
+		)
+		sess = fallback
+	}
+
+	details, err := stripeutil.ParseCheckoutSessionPayment(sess)
+	if err != nil {
+		if fallback != nil && stripeutil.CheckoutSessionIsPaid(fallback) {
+			details, err = stripeutil.ParseCheckoutSessionPayment(fallback)
+		}
+	}
+	if err != nil {
+		ctrl.logger.Info("checkout session not applied",
+			zap.String("session_id", sessionID),
+			zap.Error(err),
 		)
 		return nil
 	}
 
-	quotationID, err := parseUintMeta(sess.Metadata, "quotation_id")
-	if err != nil || quotationID == 0 {
-		return fmt.Errorf("checkout session missing quotation_id metadata")
-	}
-
-	amount := stripeutil.FromStripeAmount(sess.AmountTotal)
-	if amount <= 0 {
-		if raw := strings.TrimSpace(sess.Metadata["charge_amount"]); raw != "" {
-			if parsed, parseErr := strconv.ParseFloat(raw, 64); parseErr == nil {
-				amount = parsed
-			}
-		}
-	}
-	if amount <= 0 {
-		return errors.New("checkout session has no payable amount")
-	}
-
-	var paymentIntentID string
-	if sess.PaymentIntent != nil {
-		paymentIntentID = sess.PaymentIntent.ID
-	}
-
-	return ctrl.appointments.ApplyStripeCheckoutPayment(quotationID, amount, sess.ID, paymentIntentID)
-}
-
-func parseUintMeta(meta map[string]string, key string) (uint, error) {
-	if meta == nil {
-		return 0, errors.New("missing metadata")
-	}
-	raw := strings.TrimSpace(meta[key])
-	if raw == "" {
-		return 0, fmt.Errorf("missing %s", key)
-	}
-	n, err := strconv.ParseUint(raw, 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	return uint(n), nil
+	return ctrl.appointments.ApplyStripeCheckoutPayment(
+		details.QuotationID,
+		details.Amount,
+		details.SessionID,
+		details.PaymentIntentID,
+	)
 }

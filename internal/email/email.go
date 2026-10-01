@@ -57,6 +57,25 @@ func textToHTML(body string) string {
 
 // htmlBody wraps the message body in a branded template with the logo on a dark banner.
 func htmlBody(textBody string) string {
+	return htmlBodyWithCTA(textBody, "", "")
+}
+
+// htmlBodyWithCTA is like htmlBody, plus an optional primary CTA button (e.g. Stripe pay link).
+func htmlBodyWithCTA(textBody, ctaLabel, ctaURL string) string {
+	ctaLabel = strings.TrimSpace(ctaLabel)
+	ctaURL = strings.TrimSpace(ctaURL)
+	ctaBlock := ""
+	if ctaLabel != "" && ctaURL != "" {
+		safeURL := html.EscapeString(ctaURL)
+		safeLabel := html.EscapeString(ctaLabel)
+		ctaBlock = `
+<div style="margin:28px 0 8px;text-align:center">
+  <a href="` + safeURL + `" style="display:inline-block;background:#c0392b;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 28px;border-radius:8px;letter-spacing:0.02em">` + safeLabel + `</a>
+</div>
+<p style="text-align:center;color:#888;font-size:12px;margin:0 0 8px;line-height:1.5">Button not working? Copy and paste this link into your browser:<br>
+<a href="` + safeURL + `" style="color:#c0392b;word-break:break-all;font-size:11px">` + safeURL + `</a></p>`
+	}
+
 	return `<!DOCTYPE html><html><body style="margin:0;padding:24px;background:#f4f4f5">` +
 		`<div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a">` +
 		`<div style="background:#000;padding:18px;text-align:center;border-radius:8px 8px 0 0">` +
@@ -64,6 +83,7 @@ func htmlBody(textBody string) string {
 		`</div>` +
 		`<div style="padding:24px;background:#ffffff;border:1px solid #e5e5e5;border-top:none;line-height:1.6;font-size:15px">` +
 		textToHTML(textBody) +
+		ctaBlock +
 		`</div>` +
 		`<p style="text-align:center;color:#999;font-size:12px;margin:16px 0">Polygraph Forensic System</p>` +
 		`</div></body></html>`
@@ -245,9 +265,16 @@ func sendViaResendWithAttachment(apiKey, from, to, subject, textBody, htmlConten
 }
 
 func SendWithAttachment(toEmail, subject, textBody, attachmentName string, attachmentBytes []byte) error {
+	return SendWithAttachmentCTA(toEmail, subject, textBody, attachmentName, attachmentBytes, "", "")
+}
+
+// SendWithAttachmentCTA is SendWithAttachment plus an optional HTML CTA button.
+// The button URL is not dumped as a giant link in the main message body.
+func SendWithAttachmentCTA(toEmail, subject, textBody, attachmentName string, attachmentBytes []byte, ctaLabel, ctaURL string) error {
+	htmlContent := htmlBodyWithCTA(textBody, ctaLabel, ctaURL)
 	if apiKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY")); apiKey != "" {
 		return sendViaResendWithAttachment(apiKey, resendFrom(),
-			sanitizeHeader(toEmail), sanitizeHeader(subject), textBody, htmlBody(textBody), attachmentName, attachmentBytes)
+			sanitizeHeader(toEmail), sanitizeHeader(subject), textBody, htmlContent, attachmentName, attachmentBytes)
 	}
 
 	host := strings.TrimSpace(os.Getenv("SMTP_HOST"))
@@ -289,7 +316,7 @@ func SendWithAttachment(toEmail, subject, textBody, attachmentName string, attac
 	// HTML body
 	fmt.Fprintf(&b, "--%s\r\n", altBoundary)
 	b.WriteString("Content-Type: text/html; charset=\"UTF-8\"\r\n\r\n")
-	b.WriteString(htmlBody(textBody) + "\r\n")
+	b.WriteString(htmlContent + "\r\n")
 	fmt.Fprintf(&b, "--%s--\r\n\r\n", altBoundary)
 
 	// Attachment part

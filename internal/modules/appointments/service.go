@@ -19,6 +19,7 @@ import (
 	"my-app/internal/modules/availability"
 	"my-app/internal/modules/subjects"
 	"my-app/internal/storage"
+	"my-app/internal/stripeutil"
 	"my-app/internal/timeutil"
 
 	"gorm.io/gorm"
@@ -1283,9 +1284,9 @@ func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, b
 		trimmedBody = "Please review your quotation from Polygraph."
 	}
 
-	if stripeInfo != nil && strings.TrimSpace(stripeInfo.URL) != "" {
-		payURL := strings.TrimSpace(stripeInfo.URL)
-		trimmedBody = trimmedBody + "\n\n---\nPay online securely:\n" + payURL + "\n"
+	payURL := ""
+	if stripeInfo != nil {
+		payURL = strings.TrimSpace(stripeInfo.URL)
 	}
 
 	quote, err := s.GetQuotationByID(id)
@@ -1301,12 +1302,19 @@ func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, b
 	filename = filename + ".pdf"
 
 	if pdfErr == nil && len(pdfBytes) > 0 {
-		if err := email.SendWithAttachment(toEmail, trimmedSubject, trimmedBody, filename, pdfBytes); err != nil {
+		if payURL != "" {
+			if err := email.SendWithAttachmentCTA(toEmail, trimmedSubject, trimmedBody, filename, pdfBytes, "Pay invoice online", payURL); err != nil {
+				return err
+			}
+		} else if err := email.SendWithAttachment(toEmail, trimmedSubject, trimmedBody, filename, pdfBytes); err != nil {
 			return err
 		}
 	} else {
-		// Fall back to body-only email if PDF generation fails.
-		if err := sendSMTPMail(toEmail, trimmedSubject, trimmedBody); err != nil {
+		textBody := trimmedBody
+		if payURL != "" {
+			textBody = textBody + "\n\nPay online: " + payURL + "\n"
+		}
+		if err := sendSMTPMail(toEmail, trimmedSubject, textBody); err != nil {
 			return err
 		}
 	}
@@ -1444,6 +1452,36 @@ func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, s
 		}
 		return tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(updates).Error
 	})
+}
+
+// SyncStripePaymentForQuotation fetches the stored Checkout Session from Stripe and applies payment if paid.
+func (s *Service) SyncStripePaymentForQuotation(id string) error {
+	quote, err := s.GetQuotationByID(id)
+	if err != nil {
+		return err
+	}
+	sessionID := strings.TrimSpace(quote.StripeCheckoutSessionID)
+	if sessionID == "" {
+		return errors.New("no Stripe checkout session on this quotation — send the invoice email with a payment link first")
+	}
+	if !stripeutil.Configured() {
+		return errors.New("Stripe is not configured (STRIPE_SECRET_KEY)")
+	}
+
+	sess, err := stripeutil.RetrieveCheckoutSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("stripe checkout session: %w", err)
+	}
+	details, err := stripeutil.ParseCheckoutSessionPayment(sess)
+	if err != nil {
+		return err
+	}
+	return s.ApplyStripeCheckoutPayment(
+		details.QuotationID,
+		details.Amount,
+		details.SessionID,
+		details.PaymentIntentID,
+	)
 }
 
 func parseAppliedStripeSessions(raw string) []string {
