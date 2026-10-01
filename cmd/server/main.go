@@ -46,6 +46,7 @@ import (
 	"my-app/internal/modules/intake"
 	"my-app/internal/modules/inventory"
 	"my-app/internal/modules/leads"
+	"my-app/internal/modules/payments"
 	"my-app/internal/modules/rbac"
 	"my-app/internal/modules/settings"
 	"my-app/internal/modules/subjects"
@@ -295,6 +296,11 @@ func main() {
 	// send pre-session reminder emails.
 	r.POST("/api/cron/run-reminders", appCtrl.RunDueReminders)
 	r.POST("/api/cron/run-corporate-summaries", appCtrl.RunCorporateDailySummaries)
+
+	// Stripe webhook — public, signature-verified (not behind StrictRateLimiter /
+	// session auth so Stripe retries are reliable).
+	paymentsCtrl := payments.NewController(appService, logger)
+	r.POST("/api/public/stripe/webhook", paymentsCtrl.HandleWebhook)
 
 	// API Routes
 	api := r.Group("/api")

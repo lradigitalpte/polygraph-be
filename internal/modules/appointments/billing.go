@@ -48,7 +48,7 @@ func catalogOrgFee(appt Appointment, typePrices map[string]float64, rates money.
 	if !ok || catalogUSD <= 0 {
 		return 0, false
 	}
-	return money.Round2(money.FromUSD(catalogUSD, rates)), true
+	return money.FromUSD(catalogUSD, rates), true
 }
 
 func amountInOrgCurrency(amount float64, currency string, rates money.Rates) float64 {
@@ -60,7 +60,7 @@ func amountInOrgCurrency(amount float64, currency string, rates money.Rates) flo
 	if org == cur {
 		return money.Round2(amount)
 	}
-	return money.Round2(money.Convert(amount, cur, org, rates))
+	return money.Convert(amount, cur, org, rates)
 }
 
 // resolveUSDFeeForAppointment returns the catalog fee in USD (exam_types.price is USD).
@@ -86,12 +86,12 @@ func (s *Service) resolveFeeInOrgCurrency(appt Appointment, typePrices map[strin
 	org := orgCurrencyCode(rates)
 	cur := strings.ToUpper(strings.TrimSpace(appt.FeeCurrency))
 	if cur == org || (cur == "" && org == "USD") {
-		return money.Round2(appt.ExamFee)
+		return money.CeilWhole(appt.ExamFee)
 	}
 	if cur == "USD" || cur == "" {
 		return amountInOrgCurrency(appt.ExamFee, "USD", rates)
 	}
-	return money.Round2(appt.ExamFee)
+	return money.CeilWhole(appt.ExamFee)
 }
 
 func (s *Service) normalizeCollectedForTarget(appt Appointment, targetFee float64, rates money.Rates) float64 {
@@ -135,9 +135,9 @@ func (s *Service) canonicalAppointmentAmounts(appt Appointment, typePrices map[s
 		return target, collected
 	}
 
-	// Amounts already stored in org billing currency — use as-is.
+	// Amounts already stored in org billing currency — use as-is (ceil fees to whole units).
 	if feeCur == org && appt.ExamFee > 0 {
-		fee := money.Round2(appt.ExamFee)
+		fee := money.CeilWhole(appt.ExamFee)
 		return fee, s.normalizeCollectedForTarget(appt, fee, rates)
 	}
 
@@ -158,7 +158,7 @@ func (s *Service) canonicalAppointmentAmounts(appt Appointment, typePrices map[s
 	if hasCatalog && target > 0 {
 		return target, s.normalizeCollectedForTarget(appt, target, rates)
 	}
-	return money.Round2(appt.ExamFee), s.normalizeCollectedForTarget(appt, appt.ExamFee, rates)
+	return money.CeilWhole(appt.ExamFee), s.normalizeCollectedForTarget(appt, appt.ExamFee, rates)
 }
 
 func (s *Service) normalizeAppointmentMoney(appt *Appointment, typePrices map[string]float64, rates money.Rates) {
@@ -470,24 +470,25 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 		qid := quote.ID
 		aid := appt.ID
 		addEntry(AccountLedgerEntry{
-			ID:            quote.ID,
-			Source:        "booking",
-			Code:          code,
-			ReferenceID:   appt.ID,
-			AppointmentID: &aid,
-			QuotationID:   &qid,
-			ClientID:      appt.ClientID,
-			ClientName:    clientName,
-			ClientEmail:   clientEmail,
-			Title:         appointmentTitleFromNotes(appt.Notes),
-			Date:          appt.ScheduledAt,
-			TotalAmount:   totalDue,
-			PaidAmount:    paid,
-			BalanceDue:    balance,
-			Status:        appt.PaymentStatus,
-			PaymentMode:   appt.PaymentMode,
-			Currency:      defaultCurrency,
-			ExaminerName:  examinerNames[appt.ExaminerID],
+			ID:                   quote.ID,
+			Source:               "booking",
+			Code:                 code,
+			ReferenceID:          appt.ID,
+			AppointmentID:        &aid,
+			QuotationID:          &qid,
+			ClientID:             appt.ClientID,
+			ClientName:           clientName,
+			ClientEmail:          clientEmail,
+			Title:                appointmentTitleFromNotes(appt.Notes),
+			Date:                 appt.ScheduledAt,
+			TotalAmount:          totalDue,
+			PaidAmount:           paid,
+			BalanceDue:           balance,
+			Status:               appt.PaymentStatus,
+			PaymentMode:          appt.PaymentMode,
+			Currency:             defaultCurrency,
+			ExaminerName:         examinerNames[appt.ExaminerID],
+			StripePaymentLinkURL: quote.StripePaymentLinkURL,
 		})
 	}
 
@@ -553,22 +554,23 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 
 		qid := quote.ID
 		addEntry(AccountLedgerEntry{
-			ID:           quote.ID,
-			Source:       "quote",
-			Code:         code,
-			ReferenceID:  quote.ID,
-			QuotationID:  &qid,
-			ClientID:     quote.ClientID,
-			ClientName:   quote.Client.Name,
-			ClientEmail:  quote.Client.Email,
-			Title:        quote.Title,
-			Date:         quote.CreatedAt,
-			TotalAmount:  total,
-			PaidAmount:   paid,
-			BalanceDue:   balance,
-			Status:       quote.Status,
-			Currency:     defaultCurrency,
-			ExaminerName: examinerNameFromQuoteTitle(quote.Title),
+			ID:                   quote.ID,
+			Source:               "quote",
+			Code:                 code,
+			ReferenceID:          quote.ID,
+			QuotationID:          &qid,
+			ClientID:             quote.ClientID,
+			ClientName:           quote.Client.Name,
+			ClientEmail:          quote.Client.Email,
+			Title:                quote.Title,
+			Date:                 quote.CreatedAt,
+			TotalAmount:          total,
+			PaidAmount:           paid,
+			BalanceDue:           balance,
+			Status:               quote.Status,
+			Currency:             defaultCurrency,
+			ExaminerName:         examinerNameFromQuoteTitle(quote.Title),
+			StripePaymentLinkURL: quote.StripePaymentLinkURL,
 		})
 	}
 

@@ -26,4 +26,10 @@ type Quotation struct {
 	EmailSubject    string         `gorm:"size:255" json:"email_subject,omitempty"`
 	EmailBody       string         `gorm:"type:text" json:"email_body,omitempty"`
 	Currency        string         `gorm:"size:10;default:'USD'" json:"currency"`
+
+	// Stripe Checkout (last generated payment link + applied session tracking).
+	StripeCheckoutSessionID  string `gorm:"size:255" json:"stripe_checkout_session_id,omitempty"`
+	StripePaymentIntentID    string `gorm:"size:255" json:"stripe_payment_intent_id,omitempty"`
+	StripePaymentLinkURL     string `gorm:"size:512" json:"stripe_payment_link_url,omitempty"`
+	StripeAppliedSessionIDs  string `gorm:"type:text" json:"stripe_applied_session_ids,omitempty"` // JSON array of applied Checkout Session IDs
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"my-app/internal/middleware"
+	"my-app/internal/stripeutil"
 )
 
 type Controller struct {
@@ -738,6 +739,22 @@ func (ctrl *Controller) GetQuotations(c *gin.Context) {
 	c.JSON(http.StatusOK, quotes)
 }
 
+// GetQuotation godoc
+// @Summary Get quotation by ID
+// @Tags business
+// @Produce json
+// @Param id path int true "Quotation ID"
+// @Success 200 {object} Quotation
+// @Router /api/quotations/{id} [get]
+func (ctrl *Controller) GetQuotation(c *gin.Context) {
+	quote, err := ctrl.service.GetQuotationByID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, quote)
+}
+
 // CreateQuotation godoc
 // @Summary Create quotation
 // @Tags business
@@ -771,20 +788,77 @@ func (ctrl *Controller) CreateQuotation(c *gin.Context) {
 func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 	id := c.Param("id")
 	var input struct {
-		ToEmail string `json:"to_email" binding:"required"`
-		Subject string `json:"subject"`
-		Body    string `json:"body"`
+		ToEmail      string   `json:"to_email" binding:"required"`
+		Subject      string   `json:"subject"`
+		Body         string   `json:"body"`
+		ChargeAmount *float64 `json:"charge_amount"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := ctrl.service.MarkQuotationSent(id, input.ToEmail, input.Subject, input.Body); err != nil {
+	quote, err := ctrl.service.GetQuotationByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	remaining := quote.Amount - quote.CollectedAmount
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	var stripeInfo *StripeSendInfo
+	if remaining > 0 {
+		chargeAmount := remaining
+		if input.ChargeAmount != nil {
+			chargeAmount = *input.ChargeAmount
+		}
+		if chargeAmount <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "charge_amount must be greater than zero"})
+			return
+		}
+		if chargeAmount > remaining+0.0001 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "charge_amount cannot exceed remaining balance"})
+			return
+		}
+		if !stripeutil.Configured() {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Stripe is not configured (STRIPE_SECRET_KEY)"})
+			return
+		}
+
+		customerEmail := strings.TrimSpace(input.ToEmail)
+		if customerEmail == "" {
+			customerEmail = strings.TrimSpace(quote.Client.Email)
+		}
+		result, createErr := stripeutil.CreateCheckoutSession(stripeutil.CreateCheckoutSessionParams{
+			QuotationID:   quote.ID,
+			AppointmentID: quote.AppointmentID,
+			Code:          quote.Code,
+			Title:         quote.Title,
+			CustomerEmail: customerEmail,
+			Currency:      quote.Currency,
+			ChargeAmount:  chargeAmount,
+		})
+		if createErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": createErr.Error()})
+			return
+		}
+		stripeInfo = &StripeSendInfo{SessionID: result.SessionID, URL: result.URL}
+	}
+
+	if err := ctrl.service.MarkQuotationSent(id, input.ToEmail, input.Subject, input.Body, stripeInfo); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Quotation marked as emailed"})
+
+	resp := gin.H{"message": "Quotation marked as emailed"}
+	if stripeInfo != nil {
+		resp["payment_url"] = stripeInfo.URL
+		resp["stripe_checkout_session_id"] = stripeInfo.SessionID
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // ApproveQuotation godoc

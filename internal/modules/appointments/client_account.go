@@ -26,7 +26,8 @@ type AccountLedgerEntry struct {
 	PaidAmount    float64   `json:"paid_amount"`
 	BalanceDue    float64   `json:"balance_due"`
 	Status        string    `json:"status"`
-	PaymentMode   string    `json:"payment_mode,omitempty"`
-	Currency      string    `json:"currency,omitempty"`
-	ExaminerName  string    `json:"examiner_name,omitempty"`
+	PaymentMode          string `json:"payment_mode,omitempty"`
+	Currency             string `json:"currency,omitempty"`
+	ExaminerName         string `json:"examiner_name,omitempty"`
+	StripePaymentLinkURL string `json:"stripe_payment_link_url,omitempty"`
 }

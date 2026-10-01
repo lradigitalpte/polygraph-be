@@ -1,0 +1,135 @@
+package stripeutil
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/stripe/stripe-go/v82"
+	"github.com/stripe/stripe-go/v82/checkout/session"
+)
+
+// CheckoutResult is the hosted Checkout URL and related Stripe IDs.
+type CheckoutResult struct {
+	SessionID string
+	URL       string
+}
+
+// Configured reports whether Stripe secret key is available.
+func Configured() bool {
+	return strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY")) != ""
+}
+
+func initStripe() error {
+	key := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY"))
+	if key == "" {
+		return errors.New("STRIPE_SECRET_KEY is not configured")
+	}
+	stripe.Key = key
+	return nil
+}
+
+func frontendBaseURL() string {
+	if u := strings.TrimSpace(os.Getenv("FRONTEND_URL")); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	if u := strings.TrimSpace(os.Getenv("APP_PUBLIC_URL")); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	return "http://localhost:3000"
+}
+
+// ToStripeAmount converts a major-unit amount (e.g. 150.50) to Stripe's smallest unit.
+func ToStripeAmount(amount float64) int64 {
+	return int64(math.Round(amount * 100))
+}
+
+// FromStripeAmount converts Stripe's smallest unit back to major units.
+func FromStripeAmount(cents int64) float64 {
+	return float64(cents) / 100.0
+}
+
+// CreateCheckoutSessionParams are inputs for a one-time invoice payment link.
+type CreateCheckoutSessionParams struct {
+	QuotationID   uint
+	AppointmentID *uint
+	Code          string
+	Title         string
+	CustomerEmail string
+	Currency      string
+	ChargeAmount  float64
+}
+
+// CreateCheckoutSession creates a one-time Stripe Checkout Session for an invoice balance or deposit.
+func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, error) {
+	if err := initStripe(); err != nil {
+		return nil, err
+	}
+	if p.ChargeAmount <= 0 {
+		return nil, errors.New("charge amount must be greater than zero")
+	}
+	currency := strings.ToLower(strings.TrimSpace(p.Currency))
+	if currency == "" {
+		currency = "usd"
+	}
+	unitAmount := ToStripeAmount(p.ChargeAmount)
+	if unitAmount < 1 {
+		return nil, errors.New("charge amount is too small")
+	}
+
+	name := strings.TrimSpace(p.Title)
+	if name == "" {
+		name = "Polygraph invoice"
+	}
+	desc := strings.TrimSpace(p.Code)
+	if desc == "" {
+		desc = fmt.Sprintf("Quotation #%d", p.QuotationID)
+	}
+
+	meta := map[string]string{
+		"quotation_id":  strconv.FormatUint(uint64(p.QuotationID), 10),
+		"charge_amount": fmt.Sprintf("%.2f", p.ChargeAmount),
+	}
+	if p.AppointmentID != nil {
+		meta["appointment_id"] = strconv.FormatUint(uint64(*p.AppointmentID), 10)
+	}
+
+	base := frontendBaseURL()
+	params := &stripe.CheckoutSessionParams{
+		Mode:       stripe.String(string(stripe.CheckoutSessionModePayment)),
+		SuccessURL: stripe.String(base + "/pay/success?session_id={CHECKOUT_SESSION_ID}"),
+		CancelURL:  stripe.String(base + "/pay/cancel"),
+		LineItems: []*stripe.CheckoutSessionLineItemParams{
+			{
+				Quantity: stripe.Int64(1),
+				PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+					Currency:   stripe.String(currency),
+					UnitAmount: stripe.Int64(unitAmount),
+					ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+						Name:        stripe.String(name),
+						Description: stripe.String(desc),
+					},
+				},
+			},
+		},
+		Metadata: meta,
+		PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
+			Metadata: meta,
+		},
+	}
+	if email := strings.TrimSpace(p.CustomerEmail); email != "" && strings.Contains(email, "@") {
+		params.CustomerEmail = stripe.String(email)
+	}
+
+	sess, err := session.New(params)
+	if err != nil {
+		return nil, fmt.Errorf("stripe checkout session: %w", err)
+	}
+	if sess.URL == "" {
+		return nil, errors.New("stripe checkout session missing URL")
+	}
+	return &CheckoutResult{SessionID: sess.ID, URL: sess.URL}, nil
+}

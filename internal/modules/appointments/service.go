@@ -1262,7 +1262,13 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 	return s.db.Preload("Client").First(input, input.ID).Error
 }
 
-func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, body string) error {
+// StripeSendInfo carries a Checkout Session created before emailing the quotation.
+type StripeSendInfo struct {
+	SessionID string
+	URL       string
+}
+
+func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, body string, stripeInfo *StripeSendInfo) error {
 	toEmail = strings.TrimSpace(toEmail)
 	if toEmail == "" || !strings.Contains(toEmail, "@") {
 		return errors.New("valid to_email is required")
@@ -1277,8 +1283,32 @@ func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, b
 		trimmedBody = "Please review your quotation from Polygraph."
 	}
 
-	if err := sendSMTPMail(toEmail, trimmedSubject, trimmedBody); err != nil {
+	if stripeInfo != nil && strings.TrimSpace(stripeInfo.URL) != "" {
+		payURL := strings.TrimSpace(stripeInfo.URL)
+		trimmedBody = trimmedBody + "\n\n---\nPay online securely:\n" + payURL + "\n"
+	}
+
+	quote, err := s.GetQuotationByID(id)
+	if err != nil {
 		return err
+	}
+
+	pdfBytes, pdfErr := BuildInvoicePDF(quote)
+	filename := strings.TrimSpace(quote.Code)
+	if filename == "" {
+		filename = fmt.Sprintf("INV-%d", quote.ID)
+	}
+	filename = filename + ".pdf"
+
+	if pdfErr == nil && len(pdfBytes) > 0 {
+		if err := email.SendWithAttachment(toEmail, trimmedSubject, trimmedBody, filename, pdfBytes); err != nil {
+			return err
+		}
+	} else {
+		// Fall back to body-only email if PDF generation fails.
+		if err := sendSMTPMail(toEmail, trimmedSubject, trimmedBody); err != nil {
+			return err
+		}
 	}
 
 	now := time.Now().UTC()
@@ -1289,8 +1319,154 @@ func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, b
 		"sent_at":       now,
 		"status":        "Sent",
 	}
+	if stripeInfo != nil {
+		if sid := strings.TrimSpace(stripeInfo.SessionID); sid != "" {
+			updates["stripe_checkout_session_id"] = sid
+		}
+		if url := strings.TrimSpace(stripeInfo.URL); url != "" {
+			updates["stripe_payment_link_url"] = url
+		}
+	}
 
 	return s.db.Model(&Quotation{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// GetQuotationByID loads a single quotation (with client) by ID string.
+func (s *Service) GetQuotationByID(id string) (*Quotation, error) {
+	var quote Quotation
+	if err := s.db.Preload("Client").First(&quote, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("quotation not found")
+		}
+		return nil, err
+	}
+	return &quote, nil
+}
+
+// ApplyStripeCheckoutPayment records a successful Stripe Checkout payment against a quotation.
+// It is idempotent per Checkout Session ID and routes through appointment collect when linked.
+func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, sessionID, paymentIntentID string) error {
+	if amount <= 0 {
+		return errors.New("amount must be greater than zero")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return errors.New("stripe session id is required")
+	}
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var quote Quotation
+		if err := tx.First(&quote, quotationID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("quotation not found")
+			}
+			return err
+		}
+
+		applied := parseAppliedStripeSessions(quote.StripeAppliedSessionIDs)
+		for _, id := range applied {
+			if id == sessionID {
+				return nil
+			}
+		}
+
+		remaining := quote.Amount - quote.CollectedAmount
+		if remaining < 0 {
+			remaining = 0
+		}
+		applyAmount := amount
+		if remaining > 0 {
+			if applyAmount > remaining {
+				applyAmount = remaining
+			}
+
+			if quote.AppointmentID != nil {
+				var appt Appointment
+				if err := tx.First(&appt, *quote.AppointmentID).Error; err != nil {
+					return err
+				}
+				newCollected := appt.CollectedAmount + applyAmount
+				totalDue := appt.ExamFee
+				if totalDue <= 0 {
+					totalDue = newCollected
+				}
+				if newCollected > totalDue {
+					newCollected = totalDue
+				}
+				status := "Partial"
+				if newCollected <= 0 {
+					status = "Unpaid"
+				} else if newCollected >= totalDue && totalDue > 0 {
+					status = "Paid"
+				}
+				if err := tx.Model(&appt).Updates(map[string]interface{}{
+					"collected_amount": newCollected,
+					"payment_status":   status,
+					"payment_mode":     "Card",
+				}).Error; err != nil {
+					return err
+				}
+				quoteCollected := quote.CollectedAmount + applyAmount
+				quoteStatus := "Partial"
+				if quoteCollected >= quote.Amount {
+					quoteCollected = quote.Amount
+					quoteStatus = "Completed"
+				}
+				if err := tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(map[string]interface{}{
+					"collected_amount": quoteCollected,
+					"status":           quoteStatus,
+				}).Error; err != nil {
+					return err
+				}
+			} else {
+				newCollected := quote.CollectedAmount + applyAmount
+				newStatus := "Partial"
+				if newCollected >= quote.Amount {
+					newCollected = quote.Amount
+					newStatus = "Completed"
+				}
+				if err := tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(map[string]interface{}{
+					"collected_amount": newCollected,
+					"status":           newStatus,
+				}).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		applied = append(applied, sessionID)
+		updates := map[string]interface{}{
+			"stripe_applied_session_ids": encodeAppliedStripeSessions(applied),
+			"stripe_checkout_session_id": sessionID,
+		}
+		if paymentIntentID != "" {
+			updates["stripe_payment_intent_id"] = paymentIntentID
+		}
+		return tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(updates).Error
+	})
+}
+
+func parseAppliedStripeSessions(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return nil
+	}
+	return ids
+}
+
+func encodeAppliedStripeSessions(ids []string) string {
+	if len(ids) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
 
 func sendSMTPMail(toEmail string, subject string, body string) error {

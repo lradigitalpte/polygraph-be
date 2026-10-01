@@ -57,6 +57,8 @@ func rateMap(r Rates) map[string]float64 {
 }
 
 // Convert mirrors the frontend convertCurrency helper.
+// Cross-currency results are rounded up to a whole unit so billed AED (etc.)
+// amounts never carry fractional fils/cents from FX (e.g. 367.25 → 368).
 func Convert(amount float64, from, to string, r Rates) float64 {
 	cleanFrom := strings.ToUpper(strings.TrimSpace(from))
 	if cleanFrom == "" {
@@ -81,7 +83,7 @@ func Convert(amount float64, from, to string, r Rates) float64 {
 	}
 
 	amountInUSD := amount / rateFrom
-	return amountInUSD * rateTo
+	return CeilWhole(amountInUSD * rateTo)
 }
 
 // FromUSD converts a USD catalog amount into the organization currency.
@@ -92,6 +94,16 @@ func FromUSD(amount float64, r Rates) float64 {
 // Round2 rounds to two decimal places for monetary values.
 func Round2(amount float64) float64 {
 	return math.Round(amount*100) / 100
+}
+
+// CeilWhole rounds a monetary amount up to the next whole currency unit.
+// Non-positive values stay at 0.
+func CeilWhole(amount float64) float64 {
+	if amount <= 0 {
+		return 0
+	}
+	// Tiny epsilon avoids floating-point values like 100.0000000002 ceilling to 101.
+	return math.Ceil(amount - 1e-9)
 }
 
 // ApproxEqual compares monetary values within one cent.
