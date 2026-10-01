@@ -48,7 +48,9 @@ func (ctrl *Controller) HandleWebhook(c *gin.Context) {
 	}
 
 	sig := c.GetHeader("Stripe-Signature")
-	event, err := webhook.ConstructEvent(payload, sig, secret)
+	event, err := webhook.ConstructEventWithOptions(payload, sig, secret, webhook.ConstructEventOptions{
+		IgnoreAPIVersionMismatch: true,
+	})
 	if err != nil {
 		ctrl.logger.Warn("stripe webhook signature verification failed", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid signature"})

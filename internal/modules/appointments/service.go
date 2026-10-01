@@ -1294,7 +1294,7 @@ func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, b
 		return err
 	}
 
-	pdfBytes, pdfErr := BuildInvoicePDF(quote)
+	pdfBytes, pdfErr := BuildInvoicePDF(quote, s.invoicePDFOrg())
 	filename := strings.TrimSpace(quote.Code)
 	if filename == "" {
 		filename = fmt.Sprintf("INV-%d", quote.ID)
@@ -1337,6 +1337,31 @@ func (s *Service) MarkQuotationSent(id string, toEmail string, subject string, b
 	}
 
 	return s.db.Model(&Quotation{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (s *Service) invoicePDFOrg() InvoicePDFOrg {
+	var row struct {
+		Name         string
+		SupportEmail string `gorm:"column:support_email"`
+		Phone        string
+		Address      string
+		LogoDataURL  string `gorm:"column:logo_data_url"`
+	}
+	org := InvoicePDFOrg{Name: "Polygraph UAE"}
+	if err := s.db.Table("organization_settings").
+		Select("name", "support_email", "phone", "address", "logo_data_url").
+		Where("id = ?", 1).
+		First(&row).Error; err != nil {
+		return org
+	}
+	if v := strings.TrimSpace(row.Name); v != "" {
+		org.Name = v
+	}
+	org.Address = strings.TrimSpace(row.Address)
+	org.Phone = strings.TrimSpace(row.Phone)
+	org.SupportEmail = strings.TrimSpace(row.SupportEmail)
+	org.LogoDataURL = strings.TrimSpace(row.LogoDataURL)
+	return org
 }
 
 // GetQuotationByID loads a single quotation (with client) by ID string.
