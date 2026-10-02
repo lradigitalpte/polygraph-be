@@ -14,6 +14,8 @@ import (
 type CheckoutPaymentDetails struct {
 	QuotationID     uint
 	Amount          float64
+	ProcessingFee   float64
+	TotalCharged    float64
 	SessionID       string
 	PaymentIntentID string
 }
@@ -71,14 +73,26 @@ func ParseCheckoutSessionPayment(sess *stripe.CheckoutSession) (*CheckoutPayment
 		return nil, errors.New("checkout session missing quotation_id metadata")
 	}
 
-	amount := FromStripeAmount(sess.AmountTotal)
-	if amount <= 0 {
-		if parsed, ok := metaChargeAmount(sess.Metadata); ok {
-			amount = parsed
-		}
+	gross := FromStripeAmount(sess.AmountTotal)
+	net := gross
+	if parsed, ok := metaChargeAmount(sess.Metadata); ok {
+		net = parsed
 	}
-	if amount <= 0 {
+	if net <= 0 {
+		net = gross
+	}
+	if net <= 0 {
 		return nil, errors.New("checkout session has no payable amount")
+	}
+	fee := 0.0
+	if parsed, ok := metaProcessingFee(sess.Metadata); ok {
+		fee = parsed
+	} else if gross > net+0.0001 {
+		fee = gross - net
+	}
+	total := gross
+	if total <= 0 {
+		total = net + fee
 	}
 
 	var paymentIntentID string
@@ -88,7 +102,9 @@ func ParseCheckoutSessionPayment(sess *stripe.CheckoutSession) (*CheckoutPayment
 
 	return &CheckoutPaymentDetails{
 		QuotationID:     quotationID,
-		Amount:          amount,
+		Amount:          net,
+		ProcessingFee:   fee,
+		TotalCharged:    total,
 		SessionID:       sess.ID,
 		PaymentIntentID: paymentIntentID,
 	}, nil
@@ -108,14 +124,26 @@ func ParsePaymentIntentPayment(pi *stripe.PaymentIntent) (*CheckoutPaymentDetail
 		return nil, errors.New("payment intent missing quotation_id metadata")
 	}
 
-	amount := FromStripeAmount(pi.Amount)
-	if amount <= 0 {
-		if parsed, ok := metaChargeAmount(pi.Metadata); ok {
-			amount = parsed
-		}
+	gross := FromStripeAmount(pi.Amount)
+	net := gross
+	if parsed, ok := metaChargeAmount(pi.Metadata); ok {
+		net = parsed
 	}
-	if amount <= 0 {
+	if net <= 0 {
+		net = gross
+	}
+	if net <= 0 {
 		return nil, errors.New("payment intent has no payable amount")
+	}
+	fee := 0.0
+	if parsed, ok := metaProcessingFee(pi.Metadata); ok {
+		fee = parsed
+	} else if gross > net+0.0001 {
+		fee = gross - net
+	}
+	total := gross
+	if total <= 0 {
+		total = net + fee
 	}
 
 	sessionID := strings.TrimSpace(pi.Metadata["checkout_session_id"])
@@ -125,10 +153,27 @@ func ParsePaymentIntentPayment(pi *stripe.PaymentIntent) (*CheckoutPaymentDetail
 
 	return &CheckoutPaymentDetails{
 		QuotationID:     quotationID,
-		Amount:          amount,
+		Amount:          net,
+		ProcessingFee:   fee,
+		TotalCharged:    total,
 		SessionID:       sessionID,
 		PaymentIntentID: pi.ID,
 	}, nil
+}
+
+func metaProcessingFee(meta map[string]string) (float64, bool) {
+	if meta == nil {
+		return 0, false
+	}
+	raw := strings.TrimSpace(meta["processing_fee"])
+	if raw == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil || parsed < 0 {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func metaChargeAmount(meta map[string]string) (float64, bool) {

@@ -34,8 +34,11 @@ type UpdateOrganizationInput struct {
 	UsdAedRate            *float64 `json:"usd_aed_rate"`
 	UsdGbpRate            *float64 `json:"usd_gbp_rate"`
 	UsdEurRate            *float64 `json:"usd_eur_rate"`
-	SundayBookingsEnabled *bool    `json:"sunday_bookings_enabled"`
-	Website               *string  `json:"website"`
+	SundayBookingsEnabled      *bool    `json:"sunday_bookings_enabled"`
+	PassStripeFeesToCustomer   *bool    `json:"pass_stripe_fees_to_customer"`
+	StripeCardFeePercent       *float64 `json:"stripe_card_fee_percent"`
+	StripeCardFeeFixed         *float64 `json:"stripe_card_fee_fixed"`
+	Website                    *string  `json:"website"`
 	// LogoDataURL: nil leaves the logo unchanged, "" removes it.
 	LogoDataURL *string `json:"logo_data_url"`
 }
@@ -101,6 +104,15 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 	}
 	if input.SundayBookingsEnabled != nil {
 		updates["sunday_bookings_enabled"] = *input.SundayBookingsEnabled
+	}
+	if input.PassStripeFeesToCustomer != nil {
+		updates["pass_stripe_fees_to_customer"] = *input.PassStripeFeesToCustomer
+	}
+	if input.StripeCardFeePercent != nil {
+		updates["stripe_card_fee_percent"] = *input.StripeCardFeePercent
+	}
+	if input.StripeCardFeeFixed != nil {
+		updates["stripe_card_fee_fixed"] = *input.StripeCardFeeFixed
 	}
 	if input.Website != nil {
 		website, err := normalizeWebsite(*input.Website)

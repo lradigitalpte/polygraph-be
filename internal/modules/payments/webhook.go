@@ -94,6 +94,8 @@ func (ctrl *Controller) HandleWebhook(c *gin.Context) {
 			details.Amount,
 			details.SessionID,
 			details.PaymentIntentID,
+			details.ProcessingFee,
+			details.TotalCharged,
 		); err != nil {
 			ctrl.logger.Error("failed to apply stripe payment intent",
 				zap.String("payment_intent_id", pi.ID),
@@ -143,5 +145,7 @@ func (ctrl *Controller) applyCheckoutSessionID(sessionID string, fallback *strip
 		details.Amount,
 		details.SessionID,
 		details.PaymentIntentID,
+		details.ProcessingFee,
+		details.TotalCharged,
 	)
 }

@@ -1373,12 +1373,13 @@ func (s *Service) GetQuotationByID(id string) (*Quotation, error) {
 		}
 		return nil, err
 	}
+	quote.PaymentHistory = parseQuotationPaymentHistory(quote.PaymentHistoryJSON)
 	return &quote, nil
 }
 
 // ApplyStripeCheckoutPayment records a successful Stripe Checkout payment against a quotation.
 // It is idempotent per Checkout Session ID and routes through appointment collect when linked.
-func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, sessionID, paymentIntentID string) error {
+func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, sessionID, paymentIntentID string, processingFee, totalCharged float64) error {
 	if amount <= 0 {
 		return errors.New("amount must be greater than zero")
 	}
@@ -1468,9 +1469,27 @@ func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, s
 		}
 
 		applied = append(applied, sessionID)
+
+		historyAmount := applyAmount
+		if historyAmount <= 0 {
+			historyAmount = amount
+		}
+		if totalCharged <= 0 {
+			totalCharged = historyAmount + processingFee
+		}
+		history := appendQuotationPaymentEntry(quote.PaymentHistoryJSON, QuotationPaymentEntry{
+			PaidAt:          time.Now().UTC(),
+			Amount:          historyAmount,
+			ProcessingFee:   processingFee,
+			TotalCharged:    totalCharged,
+			Method:          "stripe",
+			StripeSessionID: sessionID,
+		})
+
 		updates := map[string]interface{}{
 			"stripe_applied_session_ids": encodeAppliedStripeSessions(applied),
 			"stripe_checkout_session_id": sessionID,
+			"payment_history":            history,
 		}
 		if paymentIntentID != "" {
 			updates["stripe_payment_intent_id"] = paymentIntentID
@@ -1506,7 +1525,39 @@ func (s *Service) SyncStripePaymentForQuotation(id string) error {
 		details.Amount,
 		details.SessionID,
 		details.PaymentIntentID,
+		details.ProcessingFee,
+		details.TotalCharged,
 	)
+}
+
+// StripeCheckoutFeeConfig is read from organization_settings for Checkout gross-up.
+type StripeCheckoutFeeConfig struct {
+	PassFeesToCustomer bool
+	FeePercent         float64
+	FeeFixed           float64
+}
+
+func (s *Service) StripeCheckoutFeeConfig() StripeCheckoutFeeConfig {
+	cfg := StripeCheckoutFeeConfig{FeePercent: 2.9, FeeFixed: 1}
+	var row struct {
+		PassStripeFeesToCustomer bool    `gorm:"column:pass_stripe_fees_to_customer"`
+		StripeCardFeePercent     float64 `gorm:"column:stripe_card_fee_percent"`
+		StripeCardFeeFixed       float64 `gorm:"column:stripe_card_fee_fixed"`
+	}
+	if err := s.db.Table("organization_settings").
+		Select("pass_stripe_fees_to_customer", "stripe_card_fee_percent", "stripe_card_fee_fixed").
+		Where("id = ?", 1).
+		First(&row).Error; err != nil {
+		return cfg
+	}
+	cfg.PassFeesToCustomer = row.PassStripeFeesToCustomer
+	if row.StripeCardFeePercent > 0 {
+		cfg.FeePercent = row.StripeCardFeePercent
+	}
+	if row.StripeCardFeeFixed >= 0 {
+		cfg.FeeFixed = row.StripeCardFeeFixed
+	}
+	return cfg
 }
 
 func parseAppliedStripeSessions(raw string) []string {
@@ -1568,9 +1619,17 @@ func (s *Service) CollectQuotationPayment(id string, amount float64) error {
 		newStatus = "Completed"
 	}
 
+	history := appendQuotationPaymentEntry(quote.PaymentHistoryJSON, QuotationPaymentEntry{
+		PaidAt:       time.Now().UTC(),
+		Amount:       amount,
+		TotalCharged: amount,
+		Method:       "manual",
+	})
+
 	if err := s.db.Model(&Quotation{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"collected_amount": newCollected,
 		"status":           newStatus,
+		"payment_history":  history,
 	}).Error; err != nil {
 		return err
 	}

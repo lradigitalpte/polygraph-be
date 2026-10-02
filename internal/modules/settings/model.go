@@ -20,4 +20,8 @@ type OrganizationSettings struct {
 	UsdGbpRate            float64 `gorm:"default:0.7850" json:"usd_gbp_rate"`
 	UsdEurRate            float64 `gorm:"default:0.9250" json:"usd_eur_rate"`
 	SundayBookingsEnabled bool    `gorm:"default:false" json:"sunday_bookings_enabled"`
+	// When true, Stripe Checkout adds an estimated card processing fee line for the payer.
+	PassStripeFeesToCustomer bool    `gorm:"default:false" json:"pass_stripe_fees_to_customer"`
+	StripeCardFeePercent     float64 `gorm:"default:2.9" json:"stripe_card_fee_percent"`
+	StripeCardFeeFixed       float64 `gorm:"default:1" json:"stripe_card_fee_fixed"`
 }

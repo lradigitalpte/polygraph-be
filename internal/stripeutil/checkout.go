@@ -61,6 +61,10 @@ type CreateCheckoutSessionParams struct {
 	CustomerEmail string
 	Currency      string
 	ChargeAmount  float64
+	// PassProcessingFeeToCustomer adds a separate Checkout line item (estimated card fee).
+	PassProcessingFeeToCustomer bool
+	ProcessingFeePercent          float64
+	ProcessingFeeFixed            float64
 }
 
 // CreateCheckoutSession creates a one-time Stripe Checkout Session for an invoice balance or deposit.
@@ -75,9 +79,20 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 	if currency == "" {
 		currency = "usd"
 	}
-	unitAmount := ToStripeAmount(p.ChargeAmount)
+	netAmount := p.ChargeAmount
+	unitAmount := ToStripeAmount(netAmount)
 	if unitAmount < 1 {
 		return nil, errors.New("charge amount is too small")
+	}
+
+	var processingFee float64
+	var grossAmount float64 = netAmount
+	if p.PassProcessingFeeToCustomer {
+		grossAmount, processingFee = GrossChargeWithProcessingFee(
+			netAmount,
+			p.ProcessingFeePercent,
+			p.ProcessingFeeFixed,
+		)
 	}
 
 	name := strings.TrimSpace(p.Title)
@@ -91,10 +106,44 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 
 	meta := map[string]string{
 		"quotation_id":  strconv.FormatUint(uint64(p.QuotationID), 10),
-		"charge_amount": fmt.Sprintf("%.2f", p.ChargeAmount),
+		"charge_amount": fmt.Sprintf("%.2f", netAmount),
+	}
+	if processingFee > 0 {
+		meta["processing_fee"] = fmt.Sprintf("%.2f", processingFee)
+		meta["total_charged"] = fmt.Sprintf("%.2f", grossAmount)
 	}
 	if p.AppointmentID != nil {
 		meta["appointment_id"] = strconv.FormatUint(uint64(*p.AppointmentID), 10)
+	}
+
+	lineItems := []*stripe.CheckoutSessionLineItemParams{
+		{
+			Quantity: stripe.Int64(1),
+			PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+				Currency:   stripe.String(currency),
+				UnitAmount: stripe.Int64(unitAmount),
+				ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+					Name:        stripe.String(name),
+					Description: stripe.String(desc),
+				},
+			},
+		},
+	}
+	if processingFee > 0 {
+		feeCents := ToStripeAmount(processingFee)
+		if feeCents >= 1 {
+			lineItems = append(lineItems, &stripe.CheckoutSessionLineItemParams{
+				Quantity: stripe.Int64(1),
+				PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+					Currency:   stripe.String(currency),
+					UnitAmount: stripe.Int64(feeCents),
+					ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+						Name:        stripe.String("Card processing fee"),
+						Description: stripe.String("Estimated online card processing fee (non-refundable)"),
+					},
+				},
+			})
+		}
 	}
 
 	base := frontendBaseURL()
@@ -102,19 +151,7 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 		Mode:       stripe.String(string(stripe.CheckoutSessionModePayment)),
 		SuccessURL: stripe.String(base + "/pay/success?session_id={CHECKOUT_SESSION_ID}"),
 		CancelURL:  stripe.String(base + "/pay/cancel"),
-		LineItems: []*stripe.CheckoutSessionLineItemParams{
-			{
-				Quantity: stripe.Int64(1),
-				PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
-					Currency:   stripe.String(currency),
-					UnitAmount: stripe.Int64(unitAmount),
-					ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
-						Name:        stripe.String(name),
-						Description: stripe.String(desc),
-					},
-				},
-			},
-		},
+		LineItems:  lineItems,
 		Metadata: meta,
 		PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
 			Metadata: meta,

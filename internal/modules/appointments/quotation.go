@@ -32,4 +32,6 @@ type Quotation struct {
 	StripePaymentIntentID    string `gorm:"size:255" json:"stripe_payment_intent_id,omitempty"`
 	StripePaymentLinkURL     string `gorm:"size:512" json:"stripe_payment_link_url,omitempty"`
 	StripeAppliedSessionIDs  string `gorm:"type:text" json:"stripe_applied_session_ids,omitempty"` // JSON array of applied Checkout Session IDs
+	PaymentHistoryJSON       string                    `gorm:"column:payment_history;type:text" json:"-"`
+	PaymentHistory           []QuotationPaymentEntry   `gorm:"-" json:"payment_history,omitempty"`
 }

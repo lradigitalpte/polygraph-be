@@ -788,10 +788,11 @@ func (ctrl *Controller) CreateQuotation(c *gin.Context) {
 func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 	id := c.Param("id")
 	var input struct {
-		ToEmail      string   `json:"to_email" binding:"required"`
-		Subject      string   `json:"subject"`
-		Body         string   `json:"body"`
-		ChargeAmount *float64 `json:"charge_amount"`
+		ToEmail              string   `json:"to_email" binding:"required"`
+		Subject              string   `json:"subject"`
+		Body                 string   `json:"body"`
+		ChargeAmount         *float64 `json:"charge_amount"`
+		PassProcessingFee    *bool    `json:"pass_processing_fee"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -832,14 +833,22 @@ func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 		if customerEmail == "" {
 			customerEmail = strings.TrimSpace(quote.Client.Email)
 		}
+		feeCfg := ctrl.service.StripeCheckoutFeeConfig()
+		passFee := feeCfg.PassFeesToCustomer
+		if input.PassProcessingFee != nil {
+			passFee = *input.PassProcessingFee
+		}
 		result, createErr := stripeutil.CreateCheckoutSession(stripeutil.CreateCheckoutSessionParams{
-			QuotationID:   quote.ID,
-			AppointmentID: quote.AppointmentID,
-			Code:          quote.Code,
-			Title:         quote.Title,
-			CustomerEmail: customerEmail,
-			Currency:      quote.Currency,
-			ChargeAmount:  chargeAmount,
+			QuotationID:                 quote.ID,
+			AppointmentID:               quote.AppointmentID,
+			Code:                        quote.Code,
+			Title:                       quote.Title,
+			CustomerEmail:               customerEmail,
+			Currency:                    quote.Currency,
+			ChargeAmount:                chargeAmount,
+			PassProcessingFeeToCustomer: passFee,
+			ProcessingFeePercent:        feeCfg.FeePercent,
+			ProcessingFeeFixed:          feeCfg.FeeFixed,
 		})
 		if createErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": createErr.Error()})
