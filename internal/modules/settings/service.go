@@ -38,6 +38,7 @@ type UpdateOrganizationInput struct {
 	PassStripeFeesToCustomer   *bool    `json:"pass_stripe_fees_to_customer"`
 	StripeCardFeePercent       *float64 `json:"stripe_card_fee_percent"`
 	StripeCardFeeFixed         *float64 `json:"stripe_card_fee_fixed"`
+	DefaultVatRate             *float64 `json:"default_vat_rate"`
 	Website                    *string  `json:"website"`
 	// LogoDataURL: nil leaves the logo unchanged, "" removes it.
 	LogoDataURL *string `json:"logo_data_url"`
@@ -113,6 +114,9 @@ func (s *Service) UpdateOrganization(input UpdateOrganizationInput) (*Organizati
 	}
 	if input.StripeCardFeeFixed != nil {
 		updates["stripe_card_fee_fixed"] = *input.StripeCardFeeFixed
+	}
+	if input.DefaultVatRate != nil {
+		updates["default_vat_rate"] = *input.DefaultVatRate
 	}
 	if input.Website != nil {
 		website, err := normalizeWebsite(*input.Website)

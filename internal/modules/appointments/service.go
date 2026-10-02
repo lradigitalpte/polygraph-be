@@ -1260,7 +1260,51 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 		}
 	}
 
+	if input.SubtotalAmount <= 0 && input.Amount > 0 {
+		input.SubtotalAmount = input.Amount - input.VatAmount
+		if input.SubtotalAmount < 0 {
+			input.SubtotalAmount = input.Amount
+		}
+	}
+
 	return s.db.Preload("Client").First(input, input.ID).Error
+}
+
+// UpdateQuotationPricing updates invoice totals and line metadata (not payments).
+func (s *Service) UpdateQuotationPricing(id string, updates map[string]interface{}) (*Quotation, error) {
+	quote, err := s.GetQuotationByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(quote.Status, "Completed") {
+		return nil, errors.New("completed quotations cannot be repriced")
+	}
+
+	if raw, ok := updates["amount"]; ok {
+		amount, ok := raw.(float64)
+		if !ok {
+			return nil, errors.New("invalid amount")
+		}
+		if amount < quote.CollectedAmount-0.0001 {
+			return nil, fmt.Errorf("amount cannot be less than collected (%v)", quote.CollectedAmount)
+		}
+		if amount < 0 {
+			return nil, errors.New("amount cannot be negative")
+		}
+	}
+
+	if title, ok := updates["title"].(string); ok {
+		title = strings.TrimSpace(title)
+		if title == "" {
+			return nil, errors.New("title cannot be empty")
+		}
+		updates["title"] = truncate(title, 255)
+	}
+
+	if err := s.db.Model(&Quotation{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	return s.GetQuotationByID(id)
 }
 
 // StripeSendInfo carries a Checkout Session created before emailing the quotation.

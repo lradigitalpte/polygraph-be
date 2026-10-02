@@ -19,6 +19,10 @@ type Quotation struct {
 	Title           string         `gorm:"size:255;not null" json:"title"`
 	Description     string         `gorm:"type:text" json:"description"`
 	Amount          float64        `gorm:"type:numeric(10,2);not null" json:"amount"`
+	SubtotalAmount  float64        `gorm:"type:numeric(10,2);default:0" json:"subtotal_amount"`
+	DiscountAmount  float64        `gorm:"type:numeric(10,2);default:0" json:"discount_amount"`
+	VatRate         float64        `gorm:"type:numeric(6,3);default:0" json:"vat_rate"`
+	VatAmount       float64        `gorm:"type:numeric(10,2);default:0" json:"vat_amount"`
 	CollectedAmount float64        `gorm:"type:numeric(10,2);default:0" json:"collected_amount"`
 	Status          string         `gorm:"size:50;default:'Draft'" json:"status"`
 	SentAt          *time.Time     `json:"sent_at,omitempty"`

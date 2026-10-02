@@ -776,6 +776,61 @@ func (ctrl *Controller) CreateQuotation(c *gin.Context) {
 	c.JSON(http.StatusCreated, quote)
 }
 
+// UpdateQuotation godoc
+// @Summary Update quotation pricing and title
+// @Tags business
+// @Accept json
+// @Produce json
+// @Param id path int true "Quotation ID"
+// @Success 200 {object} Quotation
+// @Router /api/quotations/{id} [patch]
+func (ctrl *Controller) UpdateQuotation(c *gin.Context) {
+	id := c.Param("id")
+	var input struct {
+		Title          *string  `json:"title"`
+		Amount         *float64 `json:"amount"`
+		SubtotalAmount *float64 `json:"subtotal_amount"`
+		DiscountAmount *float64 `json:"discount_amount"`
+		VatRate        *float64 `json:"vat_rate"`
+		VatAmount      *float64 `json:"vat_amount"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	updates := map[string]interface{}{}
+	if input.Title != nil {
+		updates["title"] = *input.Title
+	}
+	if input.Amount != nil {
+		updates["amount"] = *input.Amount
+	}
+	if input.SubtotalAmount != nil {
+		updates["subtotal_amount"] = *input.SubtotalAmount
+	}
+	if input.DiscountAmount != nil {
+		updates["discount_amount"] = *input.DiscountAmount
+	}
+	if input.VatRate != nil {
+		updates["vat_rate"] = *input.VatRate
+	}
+	if input.VatAmount != nil {
+		updates["vat_amount"] = *input.VatAmount
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		return
+	}
+
+	quote, err := ctrl.service.UpdateQuotationPricing(id, updates)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, quote)
+}
+
 // SendQuotationEmail godoc
 // @Summary Mark quotation as emailed
 // @Tags business
@@ -791,8 +846,10 @@ func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 		ToEmail              string   `json:"to_email" binding:"required"`
 		Subject              string   `json:"subject"`
 		Body                 string   `json:"body"`
-		ChargeAmount         *float64 `json:"charge_amount"`
-		PassProcessingFee    *bool    `json:"pass_processing_fee"`
+		ChargeAmount          *float64 `json:"charge_amount"`
+		PassProcessingFee     *bool    `json:"pass_processing_fee"`
+		ProcessingFeePercent  *float64 `json:"processing_fee_percent"`
+		ProcessingFeeFixed    *float64 `json:"processing_fee_fixed"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -838,6 +895,14 @@ func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 		if input.PassProcessingFee != nil {
 			passFee = *input.PassProcessingFee
 		}
+		feePercent := feeCfg.FeePercent
+		feeFixed := feeCfg.FeeFixed
+		if input.ProcessingFeePercent != nil && *input.ProcessingFeePercent >= 0 {
+			feePercent = *input.ProcessingFeePercent
+		}
+		if input.ProcessingFeeFixed != nil && *input.ProcessingFeeFixed >= 0 {
+			feeFixed = *input.ProcessingFeeFixed
+		}
 		result, createErr := stripeutil.CreateCheckoutSession(stripeutil.CreateCheckoutSessionParams{
 			QuotationID:                 quote.ID,
 			AppointmentID:               quote.AppointmentID,
@@ -847,8 +912,8 @@ func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 			Currency:                    quote.Currency,
 			ChargeAmount:                chargeAmount,
 			PassProcessingFeeToCustomer: passFee,
-			ProcessingFeePercent:        feeCfg.FeePercent,
-			ProcessingFeeFixed:          feeCfg.FeeFixed,
+			ProcessingFeePercent:        feePercent,
+			ProcessingFeeFixed:            feeFixed,
 		})
 		if createErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": createErr.Error()})

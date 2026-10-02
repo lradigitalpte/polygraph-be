@@ -24,4 +24,5 @@ type OrganizationSettings struct {
 	PassStripeFeesToCustomer bool    `gorm:"default:false" json:"pass_stripe_fees_to_customer"`
 	StripeCardFeePercent     float64 `gorm:"default:2.9" json:"stripe_card_fee_percent"`
 	StripeCardFeeFixed       float64 `gorm:"default:1" json:"stripe_card_fee_fixed"`
+	DefaultVatRate           float64 `gorm:"default:5" json:"default_vat_rate"`
 }

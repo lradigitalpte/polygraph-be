@@ -138,8 +138,8 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 					Currency:   stripe.String(currency),
 					UnitAmount: stripe.Int64(feeCents),
 					ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
-						Name:        stripe.String("Card processing fee"),
-						Description: stripe.String("Estimated online card processing fee (non-refundable)"),
+						Name:        stripe.String("Processing fee"),
+						Description: stripe.String("Estimated online processing fee (non-refundable)"),
 					},
 				},
 			})
