@@ -10,6 +10,8 @@ import (
 
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/checkout/session"
+
+	"my-app/internal/money"
 )
 
 // CheckoutResult is the hosted Checkout URL and related Stripe IDs.
@@ -79,7 +81,7 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 	if currency == "" {
 		currency = "usd"
 	}
-	netAmount := p.ChargeAmount
+	netAmount := money.CeilWhole(p.ChargeAmount)
 	unitAmount := ToStripeAmount(netAmount)
 	if unitAmount < 1 {
 		return nil, errors.New("charge amount is too small")

@@ -15,6 +15,7 @@ import (
 
 	"my-app/internal/database"
 	"my-app/internal/email"
+	"my-app/internal/money"
 	"my-app/internal/modules/auth"
 	"my-app/internal/modules/availability"
 	"my-app/internal/modules/subjects"
@@ -1228,6 +1229,11 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 	if input.Amount < 0 {
 		return errors.New("amount cannot be negative")
 	}
+	input.Amount = money.CeilWhole(input.Amount)
+	input.SubtotalAmount = money.CeilWhole(input.SubtotalAmount)
+	input.DiscountAmount = money.CeilWhole(input.DiscountAmount)
+	input.VatAmount = money.CeilWhole(input.VatAmount)
+	input.CollectedAmount = money.CeilWhole(input.CollectedAmount)
 
 	var client Client
 	if err := s.db.First(&client, input.ClientID).Error; err != nil {
@@ -1299,6 +1305,18 @@ func (s *Service) UpdateQuotationPricing(id string, updates map[string]interface
 			return nil, errors.New("title cannot be empty")
 		}
 		updates["title"] = truncate(title, 255)
+	}
+
+	for _, key := range []string{"amount", "subtotal_amount", "discount_amount", "vat_amount"} {
+		raw, ok := updates[key]
+		if !ok {
+			continue
+		}
+		amount, ok := raw.(float64)
+		if !ok {
+			continue
+		}
+		updates[key] = money.CeilWhole(amount)
 	}
 
 	if err := s.db.Model(&Quotation{}).Where("id = ?", id).Updates(updates).Error; err != nil {
@@ -1647,6 +1665,7 @@ func (s *Service) ApproveQuotation(id string) error {
 }
 
 func (s *Service) CollectQuotationPayment(id string, amount float64) error {
+	amount = money.CeilWhole(amount)
 	if amount <= 0 {
 		return errors.New("amount must be greater than zero")
 	}

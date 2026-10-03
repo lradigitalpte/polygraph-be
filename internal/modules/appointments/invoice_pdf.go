@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jung-kurt/gofpdf"
+
+	"my-app/internal/money"
 )
 
 // InvoicePDFOrg is branding/contact info for generated invoice PDFs.
@@ -54,11 +56,12 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 		clientName = fmt.Sprintf("Client #%d", quote.ClientID)
 	}
 
-	paid := quote.CollectedAmount
+	totals := computeInvoiceTotals(quote)
+	paid := money.CeilWhole(quote.CollectedAmount)
 	if paid < 0 {
 		paid = 0
 	}
-	total := quote.Amount
+	total := totals.Total
 	balance := total - paid
 	if balance < 0 {
 		balance = 0
@@ -207,10 +210,14 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	pdf.CellFormat(colSN, 8, "1", "B", 0, "C", false, 0, "")
 	pdf.CellFormat(colDesc, 8, title, "B", 0, "L", false, 0, "")
 	pdf.CellFormat(colQty, 8, "1", "B", 0, "R", false, 0, "")
-	pdf.CellFormat(colUnit, 8, formatMoneyPDF(total, currency), "B", 0, "R", false, 0, "")
-	pdf.CellFormat(colTotal, 8, formatMoneyPDF(total, currency), "B", 1, "R", false, 0, "")
+	lineAmount := totals.Subtotal
+	if lineAmount <= 0 {
+		lineAmount = total
+	}
+	pdf.CellFormat(colUnit, 8, formatMoneyPDF(lineAmount, currency), "B", 0, "R", false, 0, "")
+	pdf.CellFormat(colTotal, 8, formatMoneyPDF(lineAmount, currency), "B", 1, "R", false, 0, "")
 
-	// Notes + total bar
+	// Notes + totals breakdown
 	bottomY := tableY + 24
 	notesW := contentW - 78
 	drawBox(pdf, leftX, bottomY, notesW, 28)
@@ -226,12 +233,7 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 
 	totalBarX := leftX + notesW + 8
 	totalBarW := 70.0
-	pdf.SetFillColor(invoiceAccent[0], invoiceAccent[1], invoiceAccent[2])
-	pdf.SetTextColor(255, 255, 255)
-	pdf.SetFont("Helvetica", "B", 11)
-	pdf.SetXY(totalBarX, bottomY+6)
-	pdf.CellFormat(totalBarW, 10, "Total Amount", "0", 0, "L", true, 0, "")
-	pdf.CellFormat(0, 10, formatMoneyPDF(total, currency), "0", 1, "R", true, 0, "")
+	drawInvoiceTotalsBox(pdf, totalBarX, bottomY, totalBarW, totals, currency)
 
 	pdf.SetY(280)
 	pdf.SetFont("Helvetica", "", 8)
@@ -243,6 +245,108 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+type invoiceTotals struct {
+	Subtotal  float64
+	Discount  float64
+	VAT       float64
+	VatRate   float64
+	Total     float64
+	ShowBreak bool
+}
+
+func computeInvoiceTotals(q *Quotation) invoiceTotals {
+	subtotal := money.CeilWhole(q.SubtotalAmount)
+	if subtotal <= 0 {
+		subtotal = money.CeilWhole(q.Amount)
+	}
+	discount := money.CeilWhole(q.DiscountAmount)
+	if discount > subtotal {
+		discount = subtotal
+	}
+	after := subtotal - discount
+	if after < 0 {
+		after = 0
+	}
+	rate := q.VatRate
+	if rate < 0 {
+		rate = 0
+	}
+	showVAT := money.CeilWhole(q.VatAmount) > 0 || rate > 0
+	vat := 0.0
+	if showVAT && after > 0 && rate > 0 {
+		vat = money.CeilWhole(after * rate / 100)
+	}
+	total := after + vat
+	if total <= 0 {
+		total = money.CeilWhole(q.Amount)
+	}
+	showBreak := discount > 0 || vat > 0
+	return invoiceTotals{
+		Subtotal:  subtotal,
+		Discount:  discount,
+		VAT:       vat,
+		VatRate:   rate,
+		Total:     total,
+		ShowBreak: showBreak,
+	}
+}
+
+func drawInvoiceTotalsBox(pdf *gofpdf.Fpdf, x, y, w float64, totals invoiceTotals, currency string) {
+	rowH := 7.0
+	rows := 1
+	if totals.ShowBreak {
+		rows++
+	}
+	if totals.Discount > 0 {
+		rows++
+	}
+	if totals.VAT > 0 {
+		rows++
+	}
+	boxH := float64(rows)*rowH + 4
+	drawBox(pdf, x, y, w, boxH)
+
+	curY := y + 2
+	writeTotalRow := func(label, value string, accent bool) {
+		pdf.SetXY(x+3, curY)
+		if accent {
+			pdf.SetFillColor(invoiceAccent[0], invoiceAccent[1], invoiceAccent[2])
+			pdf.SetTextColor(255, 255, 255)
+			pdf.SetFont("Helvetica", "B", 10)
+		} else {
+			pdf.SetFillColor(255, 255, 255)
+			if strings.HasPrefix(label, "Discount") {
+				pdf.SetTextColor(192, 57, 43)
+			} else {
+				pdf.SetTextColor(42, 42, 42)
+			}
+			pdf.SetFont("Helvetica", "", 9)
+		}
+		pdf.CellFormat(w/2-3, rowH, label, "", 0, "L", accent, 0, "")
+		pdf.CellFormat(w/2-3, rowH, value, "", 1, "R", accent, 0, "")
+		curY += rowH
+	}
+
+	if totals.ShowBreak {
+		writeTotalRow("Net Subtotal", formatMoneyPDF(totals.Subtotal, currency), false)
+	}
+	if totals.Discount > 0 {
+		writeTotalRow("Discount", "-"+formatMoneyPDF(totals.Discount, currency), false)
+	}
+	if totals.VAT > 0 {
+		label := fmt.Sprintf("VAT (%.0f%%)", totals.VatRate)
+		if math.Mod(totals.VatRate, 1) != 0 {
+			label = fmt.Sprintf("VAT (%.2f%%)", totals.VatRate)
+		}
+		writeTotalRow(label, formatMoneyPDF(totals.VAT, currency), false)
+	}
+	totalLabel := "Total Amount"
+	if totals.VAT > 0 {
+		totalLabel = "Total Amount (Incl. VAT)"
+	}
+	writeTotalRow(totalLabel, formatMoneyPDF(totals.Total, currency), true)
 }
 
 func drawBox(pdf *gofpdf.Fpdf, x, y, w, h float64) {
@@ -318,7 +422,7 @@ func formatMoneyPDF(amount float64, currency string) string {
 	if currency == "" {
 		currency = "AED"
 	}
-	rounded := math.Round(amount*100) / 100
+	rounded := money.CeilWhole(amount)
 	return fmt.Sprintf("%s %s", currency, formatAmountCommas(rounded))
 }
 

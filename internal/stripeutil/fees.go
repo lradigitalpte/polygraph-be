@@ -1,10 +1,11 @@
 package stripeutil
 
-import "math"
+import "my-app/internal/money"
 
 // GrossChargeWithProcessingFee returns the total the customer pays so that `netAmount`
 // is credited to the invoice after an estimated card fee (percent + fixed in same currency).
 func GrossChargeWithProcessingFee(netAmount, percent, fixed float64) (gross, fee float64) {
+	netAmount = money.CeilWhole(netAmount)
 	if netAmount <= 0 {
 		return 0, 0
 	}
@@ -14,6 +15,7 @@ func GrossChargeWithProcessingFee(netAmount, percent, fixed float64) (gross, fee
 	if fixed < 0 {
 		fixed = 0
 	}
+	fixed = money.CeilWhole(fixed)
 	if percent == 0 && fixed == 0 {
 		return netAmount, 0
 	}
@@ -21,12 +23,10 @@ func GrossChargeWithProcessingFee(netAmount, percent, fixed float64) (gross, fee
 	if rate >= 1 {
 		return netAmount, 0
 	}
-	gross = (netAmount + fixed) / (1 - rate)
-	gross = math.Round(gross*100) / 100
+	gross = money.CeilWhole((netAmount + fixed) / (1 - rate))
 	fee = gross - netAmount
 	if fee < 0 {
 		fee = 0
 	}
-	fee = math.Round(fee*100) / 100
 	return gross, fee
 }
