@@ -63,7 +63,7 @@ type CreateCheckoutSessionParams struct {
 	CustomerEmail string
 	Currency      string
 	ChargeAmount  float64
-	// PassProcessingFeeToCustomer adds a separate Checkout line item (estimated card fee).
+	// PassProcessingFeeToCustomer grosses up the single Checkout line item (fee kept in metadata).
 	PassProcessingFeeToCustomer bool
 	ProcessingFeePercent          float64
 	ProcessingFeeFixed            float64
@@ -105,6 +105,14 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 	if desc == "" {
 		desc = fmt.Sprintf("Quotation #%d", p.QuotationID)
 	}
+	if processingFee > 0 {
+		if desc != "" {
+			name = fmt.Sprintf("Invoice %s", desc)
+		} else {
+			name = "Invoice payment"
+		}
+		desc = ""
+	}
 
 	meta := map[string]string{
 		"quotation_id":  strconv.FormatUint(uint64(p.QuotationID), 10),
@@ -118,34 +126,26 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 		meta["appointment_id"] = strconv.FormatUint(uint64(*p.AppointmentID), 10)
 	}
 
+	// One line item: gross amount when the customer covers processing; metadata keeps net + fee for ledger.
+	checkoutUnitAmount := unitAmount
+	if processingFee > 0 {
+		grossCents := ToStripeAmount(grossAmount)
+		if grossCents >= 1 {
+			checkoutUnitAmount = grossCents
+		}
+	}
 	lineItems := []*stripe.CheckoutSessionLineItemParams{
 		{
 			Quantity: stripe.Int64(1),
 			PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
 				Currency:   stripe.String(currency),
-				UnitAmount: stripe.Int64(unitAmount),
+				UnitAmount: stripe.Int64(checkoutUnitAmount),
 				ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
 					Name:        stripe.String(name),
 					Description: stripe.String(desc),
 				},
 			},
 		},
-	}
-	if processingFee > 0 {
-		feeCents := ToStripeAmount(processingFee)
-		if feeCents >= 1 {
-			lineItems = append(lineItems, &stripe.CheckoutSessionLineItemParams{
-				Quantity: stripe.Int64(1),
-				PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
-					Currency:   stripe.String(currency),
-					UnitAmount: stripe.Int64(feeCents),
-					ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
-						Name:        stripe.String("Processing fee"),
-						Description: stripe.String("Estimated online processing fee (non-refundable)"),
-					},
-				},
-			})
-		}
 	}
 
 	base := frontendBaseURL()

@@ -36,6 +36,7 @@ import (
 	"my-app/internal/dbseed"
 	"my-app/internal/middleware"
 	"my-app/internal/models"
+	"my-app/internal/modules/accounting"
 	"my-app/internal/modules/agreements"
 	"my-app/internal/modules/appointments"
 	"my-app/internal/modules/auditlogs"
@@ -127,6 +128,7 @@ func main() {
 		&intake.IntakeRequest{},
 		&settings.OrganizationSettings{},
 		&inventory.InventoryItem{},
+		&accounting.Expense{},
 		&exams.SecureReportShare{},
 		&exams.ReportTemplate{},
 	)
@@ -274,6 +276,9 @@ func main() {
 	inventoryService := inventory.NewService()
 	inventoryCtrl := inventory.NewController(inventoryService)
 
+	accountingService := accounting.NewService()
+	accountingCtrl := accounting.NewController(accountingService)
+
 	// Public API (no auth) — client form fill links.
 	// StrictRateLimiter applied here because these routes have no session requirement,
 	// making them the easiest target for automated abuse (form spam, enumeration).
@@ -321,6 +326,7 @@ func main() {
 		agreements.RegisterRoutes(api, agreementsCtrl, middleware.PermissionMiddleware)
 		intake.RegisterRoutes(api, intakeCtrl, middleware.PermissionMiddleware)
 		inventory.RegisterRoutes(api, inventoryCtrl, middleware.PermissionMiddleware)
+		accounting.RegisterRoutes(api, accountingCtrl, middleware.PermissionMiddleware)
 	}
 
 	// Setup server. Timeouts guard against slow-client (Slowloris) attacks

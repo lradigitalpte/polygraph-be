@@ -72,6 +72,10 @@ func SeedDatabase(db *gorm.DB, logger *zap.Logger) {
 		{Name: "payment:view", Description: "Can view payments and financial billing", Group: "Payments"},
 		{Name: "payment:manage", Description: "Can manage billing â€” collect, edit, and delete invoices", Group: "Payments"},
 
+		// Accounting
+		{Name: "accounting:view", Description: "Can view expenses and VAT returns", Group: "Accounting"},
+		{Name: "accounting:manage", Description: "Can create and edit expenses", Group: "Accounting"},
+
 		// Reminders
 		{Name: "reminder:view", Description: "Can view and send reminders", Group: "Reminders"},
 
