@@ -129,6 +129,8 @@ func main() {
 		&settings.OrganizationSettings{},
 		&inventory.InventoryItem{},
 		&accounting.Expense{},
+		&accounting.ExpensePaymentMethod{},
+		&accounting.ExpensePurchaseItem{},
 		&exams.SecureReportShare{},
 		&exams.ReportTemplate{},
 	)
@@ -204,6 +206,9 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// Local file uploads (when S3 is not configured)
+	r.Static("/uploads", "uploads")
+
 	// Health check endpoint
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -276,7 +281,7 @@ func main() {
 	inventoryService := inventory.NewService()
 	inventoryCtrl := inventory.NewController(inventoryService)
 
-	accountingService := accounting.NewService()
+	accountingService := accounting.NewService(fileStorage)
 	accountingCtrl := accounting.NewController(accountingService)
 
 	// Public API (no auth) — client form fill links.

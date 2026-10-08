@@ -1,8 +1,12 @@
 package accounting
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -10,14 +14,16 @@ import (
 	"my-app/internal/database"
 	"my-app/internal/modules/appointments"
 	"my-app/internal/money"
+	"my-app/internal/storage"
 )
 
 type Service struct {
-	db *gorm.DB
+	db      *gorm.DB
+	storage storage.Storage
 }
 
-func NewService() *Service {
-	return &Service{db: database.GetDB()}
+func NewService(fileStorage storage.Storage) *Service {
+	return &Service{db: database.GetDB(), storage: fileStorage}
 }
 
 type CreateExpenseInput struct {
@@ -31,6 +37,16 @@ type CreateExpenseInput struct {
 	AmountIncVat float64   `json:"amount_inc_vat"`
 	Currency     string    `json:"currency"`
 	ReceiptRef   string    `json:"receipt_ref"`
+
+	PurchaseItemID *uint `json:"purchase_item_id"`
+
+	PaymentMethodID   *uint  `json:"payment_method_id"`
+	PaymentType       string `json:"payment_type"`
+	PaymentLabel      string `json:"payment_label"`
+	PaymentMethodLabel string `json:"payment_method_label"`
+	PaymentLastFour   string `json:"payment_last_four"`
+	PaymentBankName   string `json:"payment_bank_name"`
+	SavePaymentMethod bool   `json:"save_payment_method"`
 }
 
 type UpdateExpenseInput struct {
@@ -44,6 +60,12 @@ type UpdateExpenseInput struct {
 	AmountIncVat *float64   `json:"amount_inc_vat"`
 	Currency     *string    `json:"currency"`
 	ReceiptRef   *string    `json:"receipt_ref"`
+
+	PurchaseItemID  *uint   `json:"purchase_item_id"`
+	PaymentMethodID *uint   `json:"payment_method_id"`
+	PaymentType     *string `json:"payment_type"`
+	PaymentLabel    *string `json:"payment_label"`
+	PaymentLastFour *string `json:"payment_last_four"`
 }
 
 func (s *Service) ListExpenses(from, to *time.Time) ([]Expense, error) {
@@ -55,13 +77,13 @@ func (s *Service) ListExpenses(from, to *time.Time) ([]Expense, error) {
 	if to != nil {
 		q = q.Where("expense_date <= ?", *to)
 	}
-	err := q.Order("expense_date DESC, id DESC").Find(&items).Error
+	err := q.Preload("PaymentMethod").Preload("PurchaseItem").Order("expense_date DESC, id DESC").Find(&items).Error
 	return items, err
 }
 
 func (s *Service) GetExpense(id uint) (*Expense, error) {
 	var item Expense
-	if err := s.db.First(&item, id).Error; err != nil {
+	if err := s.db.Preload("PaymentMethod").Preload("PurchaseItem").First(&item, id).Error; err != nil {
 		return nil, err
 	}
 	return &item, nil
@@ -86,6 +108,11 @@ func (s *Service) CreateExpense(input CreateExpenseInput, createdBy *uint) (*Exp
 		currency = money.LoadRates(s.db).Currency
 	}
 
+	newMethodID, err := s.maybeSavePaymentMethod(input)
+	if err != nil {
+		return nil, err
+	}
+
 	item := Expense{
 		ExpenseDate:     input.ExpenseDate.UTC(),
 		Vendor:          strings.TrimSpace(input.Vendor),
@@ -97,11 +124,13 @@ func (s *Service) CreateExpense(input CreateExpenseInput, createdBy *uint) (*Exp
 		AmountIncVat:    inc,
 		Currency:        currency,
 		ReceiptRef:      strings.TrimSpace(input.ReceiptRef),
+		PurchaseItemID:  input.PurchaseItemID,
 		CreatedByUserID: createdBy,
 	}
 	if item.Category == "" {
 		item.Category = "General"
 	}
+	s.applyPaymentMethodToExpense(&item, input, newMethodID)
 
 	if err := s.db.Create(&item).Error; err != nil {
 		return nil, err
@@ -138,6 +167,29 @@ func (s *Service) UpdateExpense(id uint, input UpdateExpenseInput) (*Expense, er
 		if c != "" {
 			item.Currency = c
 		}
+	}
+	if input.PurchaseItemID != nil {
+		item.PurchaseItemID = input.PurchaseItemID
+	}
+	if input.PaymentMethodID != nil {
+		item.PaymentMethodID = input.PaymentMethodID
+		if *input.PaymentMethodID > 0 {
+			var pm ExpensePaymentMethod
+			if err := s.db.First(&pm, *input.PaymentMethodID).Error; err == nil {
+				item.PaymentType = pm.Type
+				item.PaymentLabel = pm.Label
+				item.PaymentLastFour = pm.LastFour
+			}
+		}
+	}
+	if input.PaymentType != nil {
+		item.PaymentType = normalizePaymentType(*input.PaymentType)
+	}
+	if input.PaymentLabel != nil {
+		item.PaymentLabel = strings.TrimSpace(*input.PaymentLabel)
+	}
+	if input.PaymentLastFour != nil {
+		item.PaymentLastFour = normalizeLastFour(*input.PaymentLastFour)
 	}
 
 	amountsTouched := input.AmountExVat != nil || input.VatRate != nil || input.VatAmount != nil || input.AmountIncVat != nil
@@ -184,6 +236,63 @@ func (s *Service) UpdateExpense(id uint, input UpdateExpenseInput) (*Expense, er
 
 func (s *Service) DeleteExpense(id uint) error {
 	return s.db.Delete(&Expense{}, id).Error
+}
+
+func (s *Service) UploadExpenseReceipt(ctx context.Context, expenseID uint, fileName string, body io.Reader) (*Expense, error) {
+	if s.storage == nil {
+		return nil, errors.New("file storage is not configured")
+	}
+	item, err := s.GetExpense(expenseID)
+	if err != nil {
+		return nil, err
+	}
+	fileBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	if len(fileBytes) == 0 {
+		return nil, errors.New("empty file")
+	}
+	if len(fileBytes) > 15*1024*1024 {
+		return nil, errors.New("file exceeds 15MB limit")
+	}
+	safeName := filepath.Base(strings.TrimSpace(fileName))
+	if safeName == "" || safeName == "." {
+		safeName = "receipt"
+	}
+	key := fmt.Sprintf("accounting/expenses/%d/%d_%s", expenseID, time.Now().Unix(), safeName)
+	url, err := s.storage.UploadFile(ctx, key, bytes.NewReader(fileBytes), "application/octet-stream")
+	if err != nil {
+		return nil, err
+	}
+	if item.ReceiptStorageKey != "" {
+		_ = s.storage.DeleteFile(ctx, item.ReceiptStorageKey)
+	}
+	item.ReceiptStorageKey = key
+	item.ReceiptFileName = safeName
+	item.ReceiptURL = url
+	if err := s.db.Save(item).Error; err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *Service) ExpenseReceiptDownloadURL(ctx context.Context, expenseID uint) (string, string, error) {
+	item, err := s.GetExpense(expenseID)
+	if err != nil {
+		return "", "", err
+	}
+	if item.ReceiptStorageKey == "" {
+		return "", "", errors.New("no receipt on file")
+	}
+	if s.storage == nil {
+		return item.ReceiptURL, item.ReceiptFileName, nil
+	}
+	url, err := s.storage.GetSignedURL(ctx, item.ReceiptStorageKey)
+	if err != nil {
+		return "", "", err
+	}
+	return url, item.ReceiptFileName, nil
 }
 
 type VatReturnSummary struct {
@@ -270,7 +379,7 @@ func (s *Service) BuildVatReturn(from, to time.Time) (*VatReturnReport, error) {
 			code = fmt.Sprintf("INV-%d", q.ID)
 		}
 
-		history := appointments.QuotationPaymentHistory(q.PaymentHistoryJSON)
+		history := appointments.QuotationEffectivePayments(s.db, q)
 		for _, entry := range history {
 			paidAt := entry.PaidAt.UTC()
 			if paidAt.Before(from) || paidAt.After(to) {

@@ -53,7 +53,7 @@ func (s *Service) BuildSalesReport(from, to time.Time) (*SalesReport, error) {
 	var quotes []appointments.Quotation
 	err := s.db.
 		Preload("Client").
-		Where("payment_history IS NOT NULL AND payment_history != '' AND payment_history != '[]'").
+		Where("collected_amount > 0 OR (payment_history IS NOT NULL AND payment_history != '' AND payment_history != '[]')").
 		Find(&quotes).Error
 	if err != nil {
 		return nil, err
@@ -82,7 +82,7 @@ func (s *Service) BuildSalesReport(from, to time.Time) (*SalesReport, error) {
 			code = fmt.Sprintf("INV-%d", q.ID)
 		}
 
-		history := appointments.QuotationPaymentHistory(q.PaymentHistoryJSON)
+		history := appointments.QuotationEffectivePayments(s.db, q)
 		for _, entry := range history {
 			paidAt := entry.PaidAt.UTC()
 			if paidAt.Before(from) || paidAt.After(to) {

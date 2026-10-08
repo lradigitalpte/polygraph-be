@@ -3,6 +3,7 @@ package appointments
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"my-app/internal/money"
 )
@@ -294,12 +295,34 @@ func (s *Service) syncQuotationFromAppointment(appointmentID uint) error {
 
 	billingCurrency := orgCurrencyCode(rates)
 
+	var quote Quotation
+	if err := s.db.Where("appointment_id = ?", appointmentID).First(&quote).Error; err != nil {
+		return err
+	}
+
 	updates := map[string]interface{}{
 		"amount":           appt.ExamFee,
 		"collected_amount": appt.CollectedAmount,
 		"status":           paymentStatusToQuoteStatus(appt.PaymentStatus, appt.CollectedAmount, appt.ExamFee),
 		"currency":         billingCurrency,
 	}
+
+	newCollected := money.CeilWhole(appt.CollectedAmount)
+	oldCollected := money.CeilWhole(quote.CollectedAmount)
+	if newCollected > oldCollected {
+		delta := newCollected - oldCollected
+		paidAt := appt.UpdatedAt.UTC()
+		if paidAt.IsZero() {
+			paidAt = time.Now().UTC()
+		}
+		updates["payment_history"] = appendQuotationPaymentEntry(quote.PaymentHistoryJSON, QuotationPaymentEntry{
+			PaidAt:       paidAt,
+			Amount:       delta,
+			TotalCharged: delta,
+			Method:       "appointment",
+		})
+	}
+
 	return s.db.Model(&Quotation{}).Where("appointment_id = ?", appointmentID).Updates(updates).Error
 }
 

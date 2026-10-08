@@ -22,5 +22,17 @@ type Expense struct {
 	AmountIncVat    float64        `gorm:"type:numeric(10,2);not null" json:"amount_inc_vat"`
 	Currency        string         `gorm:"size:10;default:'AED'" json:"currency"`
 	ReceiptRef      string         `gorm:"size:512" json:"receipt_ref,omitempty"`
-	CreatedByUserID *uint          `json:"created_by_user_id,omitempty"`
+	ReceiptFileName string         `gorm:"size:255" json:"receipt_file_name,omitempty"`
+	ReceiptURL      string         `gorm:"size:512" json:"receipt_url,omitempty"`
+	ReceiptStorageKey string       `gorm:"size:512" json:"-"`
+
+	PurchaseItemID   *uint                `json:"purchase_item_id,omitempty"`
+	PurchaseItem     *ExpensePurchaseItem `gorm:"foreignKey:PurchaseItemID" json:"purchase_item,omitempty"`
+	PaymentMethodID  *uint                `json:"payment_method_id,omitempty"`
+	PaymentMethod    *ExpensePaymentMethod `gorm:"foreignKey:PaymentMethodID" json:"payment_method,omitempty"`
+	PaymentType      string               `gorm:"size:32" json:"payment_type,omitempty"`
+	PaymentLabel     string               `gorm:"size:120" json:"payment_label,omitempty"`
+	PaymentLastFour  string               `gorm:"size:4" json:"payment_last_four,omitempty"`
+
+	CreatedByUserID *uint `json:"created_by_user_id,omitempty"`
 }
