@@ -59,7 +59,7 @@ func (s *Service) BuildSalesReport(from, to time.Time) (*SalesReport, error) {
 		return nil, err
 	}
 
-	var lines []SalesReportLine
+	lines := make([]SalesReportLine, 0)
 	var sumGross, sumEx, sumVat float64
 	var withVat, withoutVat int
 

@@ -245,7 +245,7 @@ func (s *Service) BuildVatReturn(from, to time.Time) (*VatReturnReport, error) {
 		return nil, err
 	}
 
-	var outputLines []VatReturnOutputLine
+	outputLines := make([]VatReturnOutputLine, 0)
 	var taxableEx float64
 	var outputVat float64
 
@@ -302,7 +302,7 @@ func (s *Service) BuildVatReturn(from, to time.Time) (*VatReturnReport, error) {
 		return nil, err
 	}
 
-	var inputLines []VatReturnInputLine
+	inputLines := make([]VatReturnInputLine, 0)
 	var inputVat float64
 	for _, e := range expenses {
 		inputLines = append(inputLines, VatReturnInputLine{
