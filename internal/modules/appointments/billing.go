@@ -311,7 +311,10 @@ func (s *Service) syncQuotationFromAppointment(appointmentID uint) error {
 	oldCollected := money.CeilWhole(quote.CollectedAmount)
 	if newCollected > oldCollected {
 		delta := newCollected - oldCollected
-		paidAt := appt.UpdatedAt.UTC()
+		paidAt := appt.ScheduledAt.UTC()
+		if paidAt.IsZero() {
+			paidAt = appt.UpdatedAt.UTC()
+		}
 		if paidAt.IsZero() {
 			paidAt = time.Now().UTC()
 		}
