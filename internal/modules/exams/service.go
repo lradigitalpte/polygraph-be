@@ -727,6 +727,10 @@ func FormatVerdictLabel(verdict, wording string) string {
 			return "NO DECEPTION INDICATED (NDI)"
 		}
 		return "TRUTHFUL"
+	case "SR":
+		return "SIGNIFICANT RESPONSE (SR)"
+	case "NSR":
+		return "NO SIGNIFICANT RESPONSE (NSR)"
 	default:
 		return "INCONCLUSIVE"
 	}
@@ -1009,9 +1013,9 @@ func GenerateEncryptedPDF(verdict string, content string, subjectName string, ex
 		pdf.SetFont("Helvetica", "B", 11)
 		resultLabel := FormatVerdictLabel(verdict, verdictWording)
 		switch verdict {
-		case "DI":
+		case "DI", "SR":
 			pdf.SetTextColor(200, 0, 0)
-		case "NDI":
+		case "NDI", "NSR":
 			pdf.SetTextColor(0, 150, 0)
 		default:
 			pdf.SetTextColor(100, 100, 100)
@@ -1132,6 +1136,8 @@ func (s *Service) GetConsolidatedReportStats(examinerID uint) (map[string]any, e
 	var totalShares int64
 	var totalNDI int64
 	var totalDI int64
+	var totalSR int64
+	var totalNSR int64
 	var totalInconclusive int64
 
 	sharesQuery := s.db.Model(&SecureReportShare{})
@@ -1158,6 +1164,12 @@ func (s *Service) GetConsolidatedReportStats(examinerID uint) (map[string]any, e
 	if err := finalizedReports().Where("verdict = ?", "DI").Count(&totalDI).Error; err != nil {
 		return nil, err
 	}
+	if err := finalizedReports().Where("verdict = ?", "SR").Count(&totalSR).Error; err != nil {
+		return nil, err
+	}
+	if err := finalizedReports().Where("verdict = ?", "NSR").Count(&totalNSR).Error; err != nil {
+		return nil, err
+	}
 	if err := finalizedReports().Where("verdict = ? OR verdict = ?", "Inconclusive", "INCONCLUSIVE").Count(&totalInconclusive).Error; err != nil {
 		return nil, err
 	}
@@ -1166,6 +1178,8 @@ func (s *Service) GetConsolidatedReportStats(examinerID uint) (map[string]any, e
 		"total_reports":      totalShares,
 		"ndi_count":          totalNDI,
 		"di_count":           totalDI,
+		"sr_count":           totalSR,
+		"nsr_count":          totalNSR,
 		"inconclusive_count": totalInconclusive,
 	}, nil
 }

@@ -75,6 +75,8 @@ func TestService_ConsolidatedStatsCountsEachFinalVerdictIndependently(t *testing
 		{ClientID: 1, SubjectID: 2, ExaminerID: 10},
 		{ClientID: 1, SubjectID: 3, ExaminerID: 20},
 		{ClientID: 1, SubjectID: 4, ExaminerID: 10},
+		{ClientID: 1, SubjectID: 5, ExaminerID: 20},
+		{ClientID: 1, SubjectID: 6, ExaminerID: 20},
 	}
 	for i := range exams {
 		require.NoError(t, db.Create(&exams[i]).Error)
@@ -84,6 +86,8 @@ func TestService_ConsolidatedStatsCountsEachFinalVerdictIndependently(t *testing
 		{ExamID: exams[1].ID, Verdict: "DI", IsLocked: true},
 		{ExamID: exams[2].ID, Verdict: "Inconclusive", IsLocked: true},
 		{ExamID: exams[3].ID, Verdict: "NDI", IsLocked: false},
+		{ExamID: exams[4].ID, Verdict: "SR", IsLocked: true},
+		{ExamID: exams[5].ID, Verdict: "NSR", IsLocked: true},
 	}
 	for i := range reports {
 		require.NoError(t, db.Create(&reports[i]).Error)
@@ -94,12 +98,16 @@ func TestService_ConsolidatedStatsCountsEachFinalVerdictIndependently(t *testing
 	assert.Equal(t, int64(1), all["ndi_count"])
 	assert.Equal(t, int64(1), all["di_count"])
 	assert.Equal(t, int64(1), all["inconclusive_count"])
+	assert.Equal(t, int64(1), all["sr_count"])
+	assert.Equal(t, int64(1), all["nsr_count"])
 
 	examiner, err := s.GetConsolidatedReportStats(10)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), examiner["ndi_count"])
 	assert.Equal(t, int64(1), examiner["di_count"])
 	assert.Equal(t, int64(0), examiner["inconclusive_count"])
+	assert.Equal(t, int64(0), examiner["sr_count"])
+	assert.Equal(t, int64(0), examiner["nsr_count"])
 }
 
 // MockStorage implements storage.Storage

@@ -90,7 +90,7 @@ type QuestionTemplate struct {
 type ExamReport struct {
 	ID                 uint       `gorm:"primarykey" json:"id"`
 	ExamID             uint       `gorm:"uniqueIndex" json:"exam_id"`
-	Verdict            string     `gorm:"size:100" json:"verdict"` // DI, NDI, Inconclusive
+	Verdict            string     `gorm:"size:100" json:"verdict"` // DI, NDI, SR, NSR, Inconclusive
 	EncryptedReport    string     `gorm:"type:text" json:"-"`
 	Hash               string     `gorm:"size:255" json:"hash"` // For integrity checking
 	CreatedAt          time.Time  `json:"created_at"`
