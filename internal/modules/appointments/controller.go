@@ -793,10 +793,26 @@ func (ctrl *Controller) UpdateQuotation(c *gin.Context) {
 		DiscountAmount *float64 `json:"discount_amount"`
 		VatRate        *float64 `json:"vat_rate"`
 		VatAmount      *float64 `json:"vat_amount"`
+		// BankAccountIDs replaces the bank details on the invoice ([] = none).
+		BankAccountIDs *[]uint `json:"bank_account_ids"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	var bankUpdated *Quotation
+	if input.BankAccountIDs != nil {
+		ids := *input.BankAccountIDs
+		if ids == nil {
+			ids = []uint{}
+		}
+		quote, err := ctrl.service.SetQuotationBankAccounts(id, ids)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		bankUpdated = quote
 	}
 
 	updates := map[string]interface{}{}
@@ -819,6 +835,10 @@ func (ctrl *Controller) UpdateQuotation(c *gin.Context) {
 		updates["vat_amount"] = *input.VatAmount
 	}
 	if len(updates) == 0 {
+		if bankUpdated != nil {
+			c.JSON(http.StatusOK, bankUpdated)
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
 		return
 	}

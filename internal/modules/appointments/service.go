@@ -18,6 +18,7 @@ import (
 	"my-app/internal/money"
 	"my-app/internal/modules/auth"
 	"my-app/internal/modules/availability"
+	"my-app/internal/modules/bankaccounts"
 	"my-app/internal/modules/subjects"
 	"my-app/internal/storage"
 	"my-app/internal/stripeutil"
@@ -1213,8 +1214,72 @@ func (s *Service) GetAllQuotations(search string) ([]Quotation, error) {
 		like := "%" + trimmed + "%"
 		query = query.Where("LOWER(code) LIKE ? OR LOWER(title) LIKE ? OR LOWER(status) LIKE ?", like, like, like)
 	}
-	err := query.Find(&quotes).Error
-	return quotes, err
+	if err := query.Find(&quotes).Error; err != nil {
+		return nil, err
+	}
+	defaults := map[string][]bankaccounts.Details{}
+	for i := range quotes {
+		s.resolveQuotationBankAccounts(&quotes[i], defaults)
+	}
+	return quotes, nil
+}
+
+// resolveQuotationBankAccounts fills BankAccounts from the stored snapshot, or from the
+// current default account for the quotation's currency when none was ever picked.
+// defaults caches lookups per currency across a list; pass nil for a single quote.
+func (s *Service) resolveQuotationBankAccounts(quote *Quotation, defaults map[string][]bankaccounts.Details) {
+	quote.BankAccounts = []bankaccounts.Details{}
+	if raw := strings.TrimSpace(quote.BankAccountsJSON); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &quote.BankAccounts)
+		return
+	}
+	currency := strings.ToUpper(strings.TrimSpace(quote.Currency))
+	if cached, ok := defaults[currency]; ok {
+		quote.BankAccounts = cached
+		return
+	}
+	found := bankaccounts.DefaultsFor(s.db, currency)
+	if found == nil {
+		found = []bankaccounts.Details{}
+	}
+	if defaults != nil {
+		defaults[currency] = found
+	}
+	quote.BankAccounts = found
+}
+
+// bankAccountsSnapshot resolves picked ids (nil = currency default) into stored JSON.
+func (s *Service) bankAccountsSnapshot(ids []uint, currency string) (string, error) {
+	var details []bankaccounts.Details
+	if ids == nil {
+		details = bankaccounts.DefaultsFor(s.db, currency)
+	} else {
+		var err error
+		if details, err = bankaccounts.DetailsByIDs(s.db, ids); err != nil {
+			return "", err
+		}
+	}
+	if details == nil {
+		details = []bankaccounts.Details{}
+	}
+	raw, err := json.Marshal(details)
+	return string(raw), err
+}
+
+// SetQuotationBankAccounts replaces the bank transfer details printed on a quotation.
+func (s *Service) SetQuotationBankAccounts(id string, ids []uint) (*Quotation, error) {
+	quote, err := s.GetQuotationByID(id)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := s.bankAccountsSnapshot(ids, quote.Currency)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&Quotation{}).Where("id = ?", quote.ID).Update("bank_accounts", snapshot).Error; err != nil {
+		return nil, err
+	}
+	return s.GetQuotationByID(id)
 }
 
 func (s *Service) CreateQuotation(input *Quotation) error {
@@ -1255,6 +1320,14 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 		input.Currency = defaultCurrency
 	}
 
+	// Never trust client-sent details; snapshot from the picked (or default) accounts.
+	snapshot, err := s.bankAccountsSnapshot(input.BankAccountIDs, input.Currency)
+	if err != nil {
+		return err
+	}
+	input.BankAccountsJSON = snapshot
+	input.BankAccountIDs = nil
+
 	if err := s.db.Create(input).Error; err != nil {
 		return err
 	}
@@ -1273,7 +1346,11 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 		}
 	}
 
-	return s.db.Preload("Client").First(input, input.ID).Error
+	if err := s.db.Preload("Client").First(input, input.ID).Error; err != nil {
+		return err
+	}
+	s.resolveQuotationBankAccounts(input, nil)
+	return nil
 }
 
 // UpdateQuotationPricing updates invoice totals and line metadata (not payments).
@@ -1440,6 +1517,7 @@ func (s *Service) GetQuotationByID(id string) (*Quotation, error) {
 		return nil, err
 	}
 	quote.PaymentHistory = parseQuotationPaymentHistory(quote.PaymentHistoryJSON)
+	s.resolveQuotationBankAccounts(&quote, nil)
 	return &quote, nil
 }
 

@@ -42,6 +42,7 @@ import (
 	"my-app/internal/modules/auditlogs"
 	"my-app/internal/modules/auth"
 	"my-app/internal/modules/availability"
+	"my-app/internal/modules/bankaccounts"
 	"my-app/internal/modules/exams"
 	"my-app/internal/modules/forms"
 	"my-app/internal/modules/intake"
@@ -127,6 +128,7 @@ func main() {
 		&agreements.AgreementRequestItem{},
 		&intake.IntakeRequest{},
 		&settings.OrganizationSettings{},
+		&bankaccounts.BankAccount{},
 		&inventory.InventoryItem{},
 		&accounting.Expense{},
 		&accounting.ExpensePaymentMethod{},
@@ -272,6 +274,8 @@ func main() {
 	settingsService := settings.NewService()
 	settingsCtrl := settings.NewController(settingsService)
 
+	bankAccountsCtrl := bankaccounts.NewController(bankaccounts.NewService())
+
 	formsService := forms.NewService()
 	formsCtrl := forms.NewController(formsService)
 
@@ -321,6 +325,7 @@ func main() {
 		rbac.RegisterRoutes(api, rbacCtrl)
 		users.RegisterRoutes(api, userCtrl, middleware.PermissionMiddleware)
 		settings.RegisterRoutes(api, settingsCtrl, middleware.PermissionMiddleware)
+		bankaccounts.RegisterRoutes(api, bankAccountsCtrl, middleware.PermissionMiddleware)
 		subjects.RegisterRoutes(api, subjectCtrl, middleware.PermissionMiddleware)
 		exams.RegisterRoutes(api, examCtrl, middleware.PermissionMiddleware)
 		appointments.RegisterRoutes(api, appCtrl, middleware.PermissionMiddleware)

@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"my-app/internal/modules/bankaccounts"
 )
 
 // Quotation represents a billable quote issued to a client.
@@ -38,4 +40,12 @@ type Quotation struct {
 	StripeAppliedSessionIDs  string `gorm:"type:text" json:"stripe_applied_session_ids,omitempty"` // JSON array of applied Checkout Session IDs
 	PaymentHistoryJSON       string                    `gorm:"column:payment_history;type:text" json:"-"`
 	PaymentHistory           []QuotationPaymentEntry   `gorm:"-" json:"payment_history,omitempty"`
+
+	// Bank transfer details printed on the invoice. BankAccountsJSON is a snapshot taken
+	// when accounts are picked ("[]" = none); empty means never picked, so the current
+	// default account for the quotation's currency is shown instead.
+	BankAccountsJSON string                 `gorm:"column:bank_accounts;type:text" json:"-"`
+	BankAccounts     []bankaccounts.Details `gorm:"-" json:"bank_accounts"`
+	// BankAccountIDs is write-only input: nil = use the currency default, [] = none.
+	BankAccountIDs []uint `gorm:"-" json:"bank_account_ids,omitempty"`
 }

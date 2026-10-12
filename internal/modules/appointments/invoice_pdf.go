@@ -12,6 +12,7 @@ import (
 
 	"github.com/jung-kurt/gofpdf"
 
+	"my-app/internal/modules/bankaccounts"
 	"my-app/internal/money"
 )
 
@@ -256,6 +257,8 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	totalBarW := 70.0
 	drawInvoiceTotalsBox(pdf, totalBarX, bottomY, totalBarW, totals, currency)
 
+	drawPaymentDetailsBox(pdf, leftX, bottomY+38, contentW, quote.BankAccounts, code)
+
 	pdf.SetY(280)
 	pdf.SetFont("Helvetica", "", 8)
 	pdf.SetTextColor(153, 153, 153)
@@ -368,6 +371,73 @@ func drawInvoiceTotalsBox(pdf *gofpdf.Fpdf, x, y, w float64, totals invoiceTotal
 		totalLabel = "Total Amount (Incl. VAT)"
 	}
 	writeTotalRow(totalLabel, formatMoneyPDF(totals.Total, currency), true)
+}
+
+// drawPaymentDetailsBox prints bank transfer details, one column per account (two per row).
+func drawPaymentDetailsBox(pdf *gofpdf.Fpdf, x, y, w float64, accounts []bankaccounts.Details, reference string) {
+	if len(accounts) == 0 {
+		return
+	}
+	const lineH = 4.5
+	colW := w - 8
+	if len(accounts) > 1 {
+		colW = (w - 8 - 6) / 2
+	}
+	rowsPerAccount := func(a bankaccounts.Details) [][2]string {
+		rows := [][2]string{
+			{"Account name", a.AccountName},
+			{"Bank", a.BankName},
+			{"Currency", a.Currency},
+			{"Account no.", a.AccountNumber},
+			{"IBAN", a.IBAN},
+			{"SWIFT / BIC", a.SwiftCode},
+		}
+		out := rows[:0]
+		for _, r := range rows {
+			if strings.TrimSpace(r[1]) != "" {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	maxRows := 0
+	for _, a := range accounts {
+		if n := len(rowsPerAccount(a)); n > maxRows {
+			maxRows = n
+		}
+	}
+	gridRows := (len(accounts) + 1) / 2
+	blockH := float64(maxRows)*lineH + 4
+	h := 11 + float64(gridRows)*blockH + 7
+	drawBox(pdf, x, y, w, h)
+
+	pdf.SetXY(x+4, y+4)
+	pdf.SetFont("Helvetica", "B", 8)
+	pdf.SetTextColor(17, 17, 17)
+	pdf.Cell(0, 5, "PAYMENT DETAILS - BANK TRANSFER")
+
+	for i, a := range accounts {
+		colX := x + 4
+		if len(accounts) > 1 && i%2 == 1 {
+			colX += colW + 6
+		}
+		rowY := y + 11 + float64(i/2)*blockH
+		for _, r := range rowsPerAccount(a) {
+			pdf.SetXY(colX, rowY)
+			pdf.SetFont("Helvetica", "B", 8.5)
+			pdf.SetTextColor(17, 17, 17)
+			pdf.CellFormat(24, lineH, r[0], "", 0, "L", false, 0, "")
+			pdf.SetFont("Helvetica", "", 8.5)
+			pdf.SetTextColor(68, 68, 68)
+			pdf.CellFormat(colW-24, lineH, r[1], "", 0, "L", false, 0, "")
+			rowY += lineH
+		}
+	}
+
+	pdf.SetXY(x+4, y+h-7)
+	pdf.SetFont("Helvetica", "I", 8.5)
+	pdf.SetTextColor(102, 102, 102)
+	pdf.Cell(0, 5, fmt.Sprintf("Please quote %s as the payment reference.", reference))
 }
 
 func drawBox(pdf *gofpdf.Fpdf, x, y, w, h float64) {
