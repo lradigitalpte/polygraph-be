@@ -12,6 +12,8 @@ type OrganizationSettings struct {
 	Phone        string    `gorm:"size:50" json:"phone"`
 	Address      string    `gorm:"size:500" json:"address"`
 	Website      string    `gorm:"size:255" json:"website"`
+	// TRN is the UAE VAT Tax Registration Number printed on invoices and quotations.
+	TRN string `gorm:"column:trn;size:50" json:"trn"`
 	// LogoDataURL is a small PNG/JPEG stored inline as a data: URL so public pages and
 	// generated PDFs can use it without presigning a storage object.
 	LogoDataURL           string  `gorm:"type:text" json:"logo_data_url"`

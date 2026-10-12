@@ -40,6 +40,7 @@ func (ctrl *Controller) GetPublicOrganization(c *gin.Context) {
 		"support_email": row.SupportEmail,
 		"address":       row.Address,
 		"website":       row.Website,
+		"trn":           row.TRN,
 		"logo_data_url": row.LogoDataURL,
 	})
 }

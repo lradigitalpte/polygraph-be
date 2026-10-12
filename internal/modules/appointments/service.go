@@ -1407,11 +1407,13 @@ func (s *Service) invoicePDFOrg() InvoicePDFOrg {
 		SupportEmail string `gorm:"column:support_email"`
 		Phone        string
 		Address      string
+		Website      string
+		TRN          string `gorm:"column:trn"`
 		LogoDataURL  string `gorm:"column:logo_data_url"`
 	}
 	org := InvoicePDFOrg{Name: "Polygraph UAE"}
 	if err := s.db.Table("organization_settings").
-		Select("name", "support_email", "phone", "address", "logo_data_url").
+		Select("name", "support_email", "phone", "address", "website", "trn", "logo_data_url").
 		Where("id = ?", 1).
 		First(&row).Error; err != nil {
 		return org
@@ -1422,6 +1424,8 @@ func (s *Service) invoicePDFOrg() InvoicePDFOrg {
 	org.Address = strings.TrimSpace(row.Address)
 	org.Phone = strings.TrimSpace(row.Phone)
 	org.SupportEmail = strings.TrimSpace(row.SupportEmail)
+	org.Website = strings.TrimSpace(row.Website)
+	org.TRN = strings.TrimSpace(row.TRN)
 	org.LogoDataURL = strings.TrimSpace(row.LogoDataURL)
 	return org
 }

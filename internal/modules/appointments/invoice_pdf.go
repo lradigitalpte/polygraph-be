@@ -21,6 +21,8 @@ type InvoicePDFOrg struct {
 	Address      string
 	Phone        string
 	SupportEmail string
+	Website      string
+	TRN          string
 	LogoDataURL  string
 }
 
@@ -102,17 +104,28 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	pdf.Ln(7)
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetTextColor(102, 102, 102)
-	for _, line := range []string{
-		strings.TrimSpace(org.Address),
-		phoneLine(org.Phone),
-		strings.TrimSpace(org.SupportEmail),
+	if addr := strings.TrimSpace(org.Address); addr != "" {
+		pdf.SetX(leftX)
+		pdf.MultiCell(95, 4.5, addr, "", "L", false)
+	}
+	for _, row := range [][2]string{
+		{"Phone", strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(org.Phone), "Phone:"))},
+		{"Email", strings.TrimSpace(org.SupportEmail)},
+		{"Web", displayWebsite(org.Website)},
+		{"TRN", strings.TrimSpace(org.TRN)},
 	} {
-		if line == "" {
+		if row[1] == "" {
 			continue
 		}
-		pdf.Cell(0, 4.5, line)
-		pdf.Ln(4.5)
+		pdf.SetX(leftX)
+		pdf.SetFont("Helvetica", "B", 9)
+		pdf.SetTextColor(17, 17, 17)
+		pdf.CellFormat(13, 4.5, row[0]+":", "", 0, "L", false, 0, "")
+		pdf.SetFont("Helvetica", "", 9)
+		pdf.SetTextColor(102, 102, 102)
+		pdf.CellFormat(0, 4.5, row[1], "", 1, "L", false, 0, "")
 	}
+	orgBottom := pdf.GetY()
 
 	// Title + meta table (right)
 	pdf.SetFont("Helvetica", "B", 22)
@@ -142,8 +155,8 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 		rowY += 7
 	}
 
-	// Bill to + payment summary boxes
-	boxY := 72.0
+	// Bill to + payment summary boxes (pushed down if the org block runs long)
+	boxY := math.Max(72.0, orgBottom+6)
 	boxH := 32.0
 	boxW := (contentW - 8) / 2
 	drawBox(pdf, leftX, boxY, boxW, boxH)
@@ -154,17 +167,25 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	pdf.SetTextColor(17, 17, 17)
 	pdf.Cell(0, 5, "BILL TO")
 	pdf.Ln(6)
+	pdf.SetX(leftX + 4)
 	pdf.SetFont("Helvetica", "B", 11)
 	pdf.Cell(0, 5, clientName)
 	pdf.Ln(5)
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetTextColor(85, 85, 85)
 	if email := strings.TrimSpace(quote.Client.Email); email != "" {
+		pdf.SetX(leftX + 4)
 		pdf.Cell(0, 4.5, "Email: "+email)
 		pdf.Ln(4.5)
 	}
 	if phone := strings.TrimSpace(quote.Client.Phone); phone != "" {
+		pdf.SetX(leftX + 4)
 		pdf.Cell(0, 4.5, "Phone: "+phone)
+		pdf.Ln(4.5)
+	}
+	if trn := strings.TrimSpace(quote.Client.TaxID); trn != "" {
+		pdf.SetX(leftX + 4)
+		pdf.Cell(0, 4.5, "TRN: "+trn)
 	}
 
 	payX := leftX + boxW + 8 + 4
@@ -355,15 +376,16 @@ func drawBox(pdf *gofpdf.Fpdf, x, y, w, h float64) {
 	pdf.RoundedRect(x, y, w, h, 2, "1234", "D")
 }
 
-func phoneLine(phone string) string {
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return ""
+// displayWebsite strips the scheme and trailing slash so the PDF shows "www.example.com".
+func displayWebsite(website string) string {
+	website = strings.TrimSpace(website)
+	for _, prefix := range []string{"https://", "http://"} {
+		if len(website) >= len(prefix) && strings.EqualFold(website[:len(prefix)], prefix) {
+			website = website[len(prefix):]
+			break
+		}
 	}
-	if strings.HasPrefix(strings.ToLower(phone), "phone:") {
-		return phone
-	}
-	return "Phone: " + phone
+	return strings.TrimSuffix(website, "/")
 }
 
 func readLogoFile(relPath string) ([]byte, string, bool) {
