@@ -1327,16 +1327,22 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 	}
 	input.BankAccountsJSON = snapshot
 	input.BankAccountIDs = nil
+	if input.LineQuantity <= 0 {
+		input.LineQuantity = 1
+	}
 
 	if err := s.db.Create(input).Error; err != nil {
 		return err
 	}
 
 	if input.Code == "" {
-		input.Code = "INV-" + strconv.Itoa(9000+int(input.ID))
+		input.Code = strconv.Itoa(9000 + int(input.ID))
 		if err := s.db.Model(&Quotation{}).Where("id = ?", input.ID).Update("code", input.Code).Error; err != nil {
 			return err
 		}
+	}
+	if input.LineQuantity <= 0 {
+		input.LineQuantity = 1
 	}
 
 	if input.SubtotalAmount <= 0 && input.Amount > 0 {
@@ -1382,6 +1388,29 @@ func (s *Service) UpdateQuotationPricing(id string, updates map[string]interface
 			return nil, errors.New("title cannot be empty")
 		}
 		updates["title"] = truncate(title, 255)
+	}
+
+	if raw, ok := updates["line_quantity"]; ok {
+		switch v := raw.(type) {
+		case int:
+			if v < 1 {
+				return nil, errors.New("line quantity must be at least 1")
+			}
+			updates["line_quantity"] = v
+		case float64:
+			if int(v) < 1 {
+				return nil, errors.New("line quantity must be at least 1")
+			}
+			updates["line_quantity"] = int(v)
+		default:
+			return nil, errors.New("invalid line quantity")
+		}
+	}
+
+	if raw, ok := updates["description"]; ok {
+		if desc, ok := raw.(string); ok {
+			updates["description"] = strings.TrimSpace(desc)
+		}
 	}
 
 	for _, key := range []string{"amount", "subtotal_amount", "discount_amount", "vat_amount"} {

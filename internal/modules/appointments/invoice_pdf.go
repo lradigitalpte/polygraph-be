@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,9 +36,10 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 		return nil, fmt.Errorf("quotation is required")
 	}
 
-	code := strings.TrimSpace(quote.Code)
-	if code == "" {
-		code = fmt.Sprintf("INV-%d", quote.ID)
+	code := displayInvoiceNumber(quote.Code, quote.ID)
+	paymentRef := strings.TrimSpace(quote.Code)
+	if paymentRef == "" {
+		paymentRef = code
 	}
 	currency := strings.ToUpper(strings.TrimSpace(quote.Currency))
 	if currency == "" {
@@ -60,15 +62,7 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	}
 
 	totals := computeInvoiceTotals(quote)
-	paid := money.CeilWhole(quote.CollectedAmount)
-	if paid < 0 {
-		paid = 0
-	}
 	total := totals.Total
-	balance := total - paid
-	if balance < 0 {
-		balance = 0
-	}
 
 	issueDate := quote.CreatedAt.UTC()
 	if issueDate.IsZero() {
@@ -163,50 +157,56 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	drawBox(pdf, leftX, boxY, boxW, boxH)
 	drawBox(pdf, leftX+boxW+8, boxY, boxW, boxH)
 
-	pdf.SetXY(leftX+4, boxY+4)
+	invX := leftX + 4
+	pdf.SetXY(invX, boxY+4)
 	pdf.SetFont("Helvetica", "B", 8)
 	pdf.SetTextColor(17, 17, 17)
-	pdf.Cell(0, 5, "BILL TO")
+	pdf.Cell(0, 5, "INVOICE TO")
 	pdf.Ln(6)
-	pdf.SetX(leftX + 4)
+	pdf.SetX(invX)
 	pdf.SetFont("Helvetica", "B", 11)
 	pdf.Cell(0, 5, clientName)
 	pdf.Ln(5)
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetTextColor(85, 85, 85)
+	if contact := strings.TrimSpace(quote.Client.ContactPerson); contact != "" {
+		pdf.SetX(invX)
+		pdf.Cell(0, 4.5, contact)
+		pdf.Ln(4.5)
+	}
 	if email := strings.TrimSpace(quote.Client.Email); email != "" {
-		pdf.SetX(leftX + 4)
-		pdf.Cell(0, 4.5, "Email: "+email)
+		pdf.SetX(invX)
+		pdf.Cell(0, 4.5, email)
 		pdf.Ln(4.5)
 	}
 	if phone := strings.TrimSpace(quote.Client.Phone); phone != "" {
-		pdf.SetX(leftX + 4)
-		pdf.Cell(0, 4.5, "Phone: "+phone)
+		pdf.SetX(invX)
+		pdf.Cell(0, 4.5, phone)
 		pdf.Ln(4.5)
 	}
-	if trn := strings.TrimSpace(quote.Client.TaxID); trn != "" {
-		pdf.SetX(leftX + 4)
-		pdf.Cell(0, 4.5, "TRN: "+trn)
-	}
 
-	payX := leftX + boxW + 8 + 4
-	pdf.SetXY(payX, boxY+4)
+	billX := leftX + boxW + 8 + 4
+	pdf.SetXY(billX, boxY+4)
 	pdf.SetFont("Helvetica", "B", 8)
 	pdf.SetTextColor(17, 17, 17)
-	pdf.Cell(0, 5, "PAYMENT SUMMARY")
+	pdf.Cell(0, 5, "BILLING ADDRESS")
 	pdf.Ln(6)
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetTextColor(85, 85, 85)
-	pdf.SetX(payX)
-	pdf.Cell(0, 4.5, "Total: "+formatMoneyPDF(total, currency))
-	pdf.Ln(4.5)
-	pdf.SetX(payX)
-	pdf.Cell(0, 4.5, "Paid: "+formatMoneyPDF(paid, currency))
-	pdf.Ln(4.5)
-	pdf.SetX(payX)
-	pdf.SetFont("Helvetica", "B", 9)
-	pdf.SetTextColor(17, 17, 17)
-	pdf.Cell(0, 4.5, "Balance due: "+formatMoneyPDF(balance, currency))
+	if addr := strings.TrimSpace(quote.Client.Address); addr != "" {
+		pdf.SetXY(billX, pdf.GetY())
+		pdf.MultiCell(boxW-8, 4.5, addr, "", "L", false)
+	} else {
+		pdf.SetX(billX)
+		pdf.Cell(0, 4.5, "—")
+		pdf.Ln(4.5)
+	}
+	if trn := strings.TrimSpace(quote.Client.TaxID); trn != "" {
+		pdf.SetX(billX)
+		pdf.SetFont("Helvetica", "B", 9)
+		pdf.SetTextColor(17, 17, 17)
+		pdf.Cell(0, 4.5, "TRN: "+trn)
+	}
 
 	// Line items table
 	tableY := boxY + boxH + 10
@@ -229,14 +229,22 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	pdf.SetTextColor(42, 42, 42)
 	pdf.SetFont("Helvetica", "", 10)
 	pdf.SetX(leftX)
-	pdf.CellFormat(colSN, 8, "1", "B", 0, "C", false, 0, "")
-	pdf.CellFormat(colDesc, 8, title, "B", 0, "L", false, 0, "")
-	pdf.CellFormat(colQty, 8, "1", "B", 0, "R", false, 0, "")
+	qty := quote.LineQuantity
+	if qty <= 0 {
+		qty = 1
+	}
 	lineAmount := totals.Subtotal
 	if lineAmount <= 0 {
 		lineAmount = total
 	}
-	pdf.CellFormat(colUnit, 8, formatMoneyPDF(lineAmount, currency), "B", 0, "R", false, 0, "")
+	unitPrice := lineAmount
+	if qty > 0 {
+		unitPrice = lineAmount / float64(qty)
+	}
+	pdf.CellFormat(colSN, 8, "1", "B", 0, "C", false, 0, "")
+	pdf.CellFormat(colDesc, 8, title, "B", 0, "L", false, 0, "")
+	pdf.CellFormat(colQty, 8, fmt.Sprintf("%d", qty), "B", 0, "R", false, 0, "")
+	pdf.CellFormat(colUnit, 8, formatMoneyPDF(unitPrice, currency), "B", 0, "R", false, 0, "")
 	pdf.CellFormat(colTotal, 8, formatMoneyPDF(lineAmount, currency), "B", 1, "R", false, 0, "")
 
 	// Notes + totals breakdown
@@ -250,14 +258,20 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 	pdf.Ln(6)
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetTextColor(68, 68, 68)
-	pdf.SetX(leftX + 8)
-	pdf.MultiCell(notesW-10, 4.5, "• This quotation is valid for 30 days from the issue date.", "", "L", false)
+	notesY := pdf.GetY()
+	for _, line := range invoiceNoteLines(quote) {
+		pdf.SetX(leftX + 8)
+		pdf.MultiCell(notesW-10, 4.5, "• "+line, "", "L", false)
+	}
+	if pdf.GetY() < notesY+8 {
+		pdf.SetY(notesY + 8)
+	}
 
 	totalBarX := leftX + notesW + 8
 	totalBarW := 70.0
 	drawInvoiceTotalsBox(pdf, totalBarX, bottomY, totalBarW, totals, currency)
 
-	drawPaymentDetailsBox(pdf, leftX, bottomY+38, contentW, quote.BankAccounts, code)
+	drawPaymentDetailsBox(pdf, leftX, bottomY+38, contentW, quote.BankAccounts, paymentRef)
 
 	pdf.SetY(280)
 	pdf.SetFont("Helvetica", "", 8)
@@ -507,6 +521,38 @@ func decodeLogoImage(dataURL string) ([]byte, string, bool) {
 		return nil, "", false
 	}
 	return raw, imgType, true
+}
+
+func displayInvoiceNumber(code string, id uint) string {
+	code = strings.TrimSpace(code)
+	if strings.HasPrefix(strings.ToUpper(code), "INV-") {
+		code = strings.TrimSpace(code[4:])
+	}
+	if code != "" {
+		return code
+	}
+	return strconv.Itoa(9000 + int(id))
+}
+
+func invoiceNoteLines(q *Quotation) []string {
+	raw := strings.TrimSpace(q.Description)
+	if raw != "" {
+		lines := strings.Split(raw, "\n")
+		out := make([]string, 0, len(lines))
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				out = append(out, line)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return []string{
+		"A 100% payment is required to confirm the booking.",
+		"This quotation is valid for 30 days from the issue date.",
+	}
 }
 
 func formatMoneyPDF(amount float64, currency string) string {

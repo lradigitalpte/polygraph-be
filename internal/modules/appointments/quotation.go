@@ -19,7 +19,8 @@ type Quotation struct {
 	AppointmentID   *uint          `json:"appointment_id,omitempty"`
 	Code            string         `gorm:"size:50;uniqueIndex" json:"code"`
 	Title           string         `gorm:"size:255;not null" json:"title"`
-	Description     string         `gorm:"type:text" json:"description"`
+	Description     string         `gorm:"type:text" json:"description"` // Printed in invoice Notes (one line per row)
+	LineQuantity    int            `gorm:"default:1" json:"line_quantity"`
 	Amount          float64        `gorm:"type:numeric(10,2);not null" json:"amount"`
 	SubtotalAmount  float64        `gorm:"type:numeric(10,2);default:0" json:"subtotal_amount"`
 	DiscountAmount  float64        `gorm:"type:numeric(10,2);default:0" json:"discount_amount"`

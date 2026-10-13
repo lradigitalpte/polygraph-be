@@ -788,6 +788,8 @@ func (ctrl *Controller) UpdateQuotation(c *gin.Context) {
 	id := c.Param("id")
 	var input struct {
 		Title          *string  `json:"title"`
+		Description    *string  `json:"description"`
+		LineQuantity   *int     `json:"line_quantity"`
 		Amount         *float64 `json:"amount"`
 		SubtotalAmount *float64 `json:"subtotal_amount"`
 		DiscountAmount *float64 `json:"discount_amount"`
@@ -818,6 +820,12 @@ func (ctrl *Controller) UpdateQuotation(c *gin.Context) {
 	updates := map[string]interface{}{}
 	if input.Title != nil {
 		updates["title"] = *input.Title
+	}
+	if input.Description != nil {
+		updates["description"] = *input.Description
+	}
+	if input.LineQuantity != nil {
+		updates["line_quantity"] = *input.LineQuantity
 	}
 	if input.Amount != nil {
 		updates["amount"] = *input.Amount
