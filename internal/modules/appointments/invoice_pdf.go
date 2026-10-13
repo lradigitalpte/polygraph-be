@@ -524,14 +524,25 @@ func decodeLogoImage(dataURL string) ([]byte, string, bool) {
 }
 
 func displayInvoiceNumber(code string, id uint) string {
+	n := invoiceNumericFromCode(code, id)
+	s := strconv.Itoa(n)
+	if len(s) < 6 {
+		return fmt.Sprintf("%06d", n)
+	}
+	return s
+}
+
+func invoiceNumericFromCode(code string, id uint) int {
 	code = strings.TrimSpace(code)
 	if strings.HasPrefix(strings.ToUpper(code), "INV-") {
 		code = strings.TrimSpace(code[4:])
 	}
 	if code != "" {
-		return code
+		if n, err := strconv.Atoi(code); err == nil {
+			return n
+		}
 	}
-	return strconv.Itoa(9000 + int(id))
+	return 9000 + int(id)
 }
 
 func invoiceNoteLines(q *Quotation) []string {

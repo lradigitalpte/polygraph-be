@@ -1336,7 +1336,7 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 	}
 
 	if input.Code == "" {
-		input.Code = strconv.Itoa(9000 + int(input.ID))
+		input.Code = fmt.Sprintf("%06d", 9000+int(input.ID))
 		if err := s.db.Model(&Quotation{}).Where("id = ?", input.ID).Update("code", input.Code).Error; err != nil {
 			return err
 		}
