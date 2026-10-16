@@ -190,6 +190,7 @@ func (s *Service) DeleteOrganizationData() error {
 			&exams.ClinicalAssessment{},
 			&exams.CaseReferral{},
 			&exams.Exam{},
+			&appointments.ExamPrepaidSlot{},
 			&appointments.Quotation{},
 			&appointments.Appointment{},
 			&subjects.Subject{},

@@ -667,6 +667,32 @@ func (ctrl *Controller) GetClientAccount(c *gin.Context) {
 	})
 }
 
+func (ctrl *Controller) GetClientPrepaidSlots(c *gin.Context) {
+	slots, err := ctrl.service.GetClientPrepaidSlots(c.Param("id"))
+	if err != nil {
+		if err.Error() == "client not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch prepaid slots"})
+		return
+	}
+	c.JSON(http.StatusOK, slots)
+}
+
+func (ctrl *Controller) GetClientPrepaidSlotSummary(c *gin.Context) {
+	summary, err := ctrl.service.GetClientPrepaidSlotSummary(c.Param("id"))
+	if err != nil {
+		if err.Error() == "client not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch prepaid slot summary"})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
 func (ctrl *Controller) CollectAppointmentPayment(c *gin.Context) {
 	var input struct {
 		Amount float64 `json:"amount" binding:"required"`
@@ -1019,6 +1045,23 @@ func (ctrl *Controller) CollectQuotationPayment(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Payment collected"})
+}
+
+func (ctrl *Controller) MintPrepaidSlotsForQuotation(c *gin.Context) {
+	var input struct {
+		LineQuantity *int `json:"line_quantity"`
+	}
+	_ = c.ShouldBindJSON(&input)
+	summary, err := ctrl.service.MintPrepaidSlotsForQuotation(c.Param("id"), input.LineQuantity)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "quotation not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
 }
 
 func (ctrl *Controller) ConvertQuotation(c *gin.Context) {

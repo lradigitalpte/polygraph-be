@@ -15,6 +15,8 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		c.GET("/:id/documents", permissionMiddleware("client:view"), ctrl.GetClientDocuments)
 		// Billing — restricted to client:manage (examiners excluded).
 		c.GET("/:id/account", permissionMiddleware("client:manage"), ctrl.GetClientAccount)
+		c.GET("/:id/prepaid-slots", permissionMiddleware("client:manage"), ctrl.GetClientPrepaidSlots)
+		c.GET("/:id/prepaid-slots/summary", permissionMiddleware("client:manage"), ctrl.GetClientPrepaidSlotSummary)
 		// Write endpoints — client:manage.
 		c.POST("", permissionMiddleware("client:manage"), ctrl.CreateClient)
 		c.PATCH("/:id", permissionMiddleware("client:manage"), ctrl.UpdateClient)
@@ -63,6 +65,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		q.POST("/:id/sync-stripe-payment", permissionMiddleware("appointment:manage"), ctrl.SyncQuotationStripePayment)
 		q.PATCH("/:id/approve", permissionMiddleware("appointment:manage"), ctrl.ApproveQuotation)
 		q.PATCH("/:id/collect-payment", permissionMiddleware("appointment:manage"), ctrl.CollectQuotationPayment)
+		q.POST("/:id/mint-prepaid-slots", permissionMiddleware("appointment:manage"), ctrl.MintPrepaidSlotsForQuotation)
 		q.POST("/:id/convert", permissionMiddleware("appointment:create"), ctrl.ConvertQuotation)
 		q.DELETE("/:id", permissionMiddleware("payment:manage"), ctrl.DeleteQuotation)
 	}

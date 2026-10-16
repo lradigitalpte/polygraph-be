@@ -62,4 +62,7 @@ type Appointment struct {
 	// RemindedAt is set when the automated pre-session reminder email is sent,
 	// so the cron job never reminds the same appointment twice.
 	RemindedAt *time.Time `json:"reminded_at,omitempty"`
+	PrepaidSlotID *uint `gorm:"index" json:"prepaid_slot_id,omitempty"`
+	// UsePrepaidSlot controls calendar booking redemption (nil = try when corporate).
+	UsePrepaidSlot *bool `gorm:"-" json:"use_prepaid_slot,omitempty"`
 }

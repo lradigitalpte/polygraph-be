@@ -188,14 +188,61 @@ func (s *Service) UpdateClient(id string, input *Client) error {
 }
 
 func (s *Service) CreateAppointment(app *Appointment) error {
-	if err := s.validateAppointment(app); err != nil {
-		return err
-	}
-	s.NormalizeNewAppointmentMoney(app)
-	if err := s.db.Create(app).Error; err != nil {
-		return err
-	}
-	return s.ensureInvoiceForAppointment(app)
+	usePrepaid := app.UsePrepaidSlot == nil || *app.UsePrepaidSlot
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		txSvc := &Service{db: tx, storage: s.storage}
+
+		if err := txSvc.validateAppointment(app); err != nil {
+			return err
+		}
+		txSvc.NormalizeNewAppointmentMoney(app)
+
+		var slotToConsume *ExamPrepaidSlot
+		if usePrepaid && app.ClientID > 0 {
+			var client Client
+			if err := tx.First(&client, app.ClientID).Error; err == nil && isCorporateClientType(client.ClientType) {
+				slot, note, err := txSvc.redeemPrepaidSlotForBooking(tx, app.ClientID)
+				if err != nil {
+					return err
+				}
+				if slot != nil {
+					slotToConsume = slot
+					app.PrepaidSlotID = &slot.ID
+					app.PaymentStatus = "Paid"
+					app.PaymentMode = "Prepaid package"
+					app.CollectedAmount = app.ExamFee
+					if strings.TrimSpace(note) != "" {
+						if strings.TrimSpace(app.Notes) != "" {
+							app.Notes = strings.TrimSpace(app.Notes) + "\n\n" + note
+						} else {
+							app.Notes = note
+						}
+					}
+				}
+			}
+		}
+
+		if err := tx.Create(app).Error; err != nil {
+			return err
+		}
+
+		if slotToConsume != nil {
+			now := time.Now().UTC()
+			if err := tx.Model(slotToConsume).Updates(map[string]interface{}{
+				"status":         "consumed",
+				"appointment_id": app.ID,
+				"consumed_at":    now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		if err := txSvc.ensureInvoiceForAppointment(app); err != nil {
+			return err
+		}
+		return txSvc.applyPrepaidSlotInvoiceNote(app)
+	})
 }
 
 func (s *Service) GetAllAppointments(clientID ...string) ([]Appointment, error) {
@@ -1547,6 +1594,7 @@ func (s *Service) GetQuotationByID(id string) (*Quotation, error) {
 	}
 	quote.PaymentHistory = parseQuotationPaymentHistory(quote.PaymentHistoryJSON)
 	s.resolveQuotationBankAccounts(&quote, nil)
+	s.populateQuotationPrepaidFlags(&quote)
 	return &quote, nil
 }
 
@@ -1667,7 +1715,20 @@ func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, s
 		if paymentIntentID != "" {
 			updates["stripe_payment_intent_id"] = paymentIntentID
 		}
-		return tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(updates).Error
+		if err := tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&quote, quotationID).Error; err != nil {
+			return err
+		}
+		txSvc := &Service{db: tx, storage: s.storage}
+		if err := txSvc.ensureSlotsForPaidQuotation(tx, &quote); err != nil {
+			return err
+		}
+		if quote.AppointmentID != nil {
+			return txSvc.syncAppointmentFromQuotation(quote.ID)
+		}
+		return nil
 	})
 }
 
@@ -1781,34 +1842,42 @@ func (s *Service) CollectQuotationPayment(id string, amount float64) error {
 		return errors.New("amount must be greater than zero")
 	}
 
-	var quote Quotation
-	if err := s.db.First(&quote, id).Error; err != nil {
-		return errors.New("quotation not found")
-	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var quote Quotation
+		if err := tx.First(&quote, id).Error; err != nil {
+			return errors.New("quotation not found")
+		}
 
-	newCollected := quote.CollectedAmount + amount
-	newStatus := "Partial"
-	if newCollected >= quote.Amount {
-		newCollected = quote.Amount
-		newStatus = "Completed"
-	}
+		newCollected := quote.CollectedAmount + amount
+		newStatus := "Partial"
+		if newCollected >= quote.Amount {
+			newCollected = quote.Amount
+			newStatus = "Completed"
+		}
 
-	history := appendQuotationPaymentEntry(quote.PaymentHistoryJSON, QuotationPaymentEntry{
-		PaidAt:       time.Now().UTC(),
-		Amount:       amount,
-		TotalCharged: amount,
-		Method:       "manual",
+		history := appendQuotationPaymentEntry(quote.PaymentHistoryJSON, QuotationPaymentEntry{
+			PaidAt:       time.Now().UTC(),
+			Amount:       amount,
+			TotalCharged: amount,
+			Method:       "manual",
+		})
+
+		if err := tx.Model(&Quotation{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"collected_amount": newCollected,
+			"status":           newStatus,
+			"payment_history":  history,
+		}).Error; err != nil {
+			return err
+		}
+
+		quote.CollectedAmount = newCollected
+		quote.Status = newStatus
+		txSvc := &Service{db: tx, storage: s.storage}
+		if err := txSvc.ensureSlotsForPaidQuotation(tx, &quote); err != nil {
+			return err
+		}
+		return txSvc.syncAppointmentFromQuotation(quote.ID)
 	})
-
-	if err := s.db.Model(&Quotation{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"collected_amount": newCollected,
-		"status":           newStatus,
-		"payment_history":  history,
-	}).Error; err != nil {
-		return err
-	}
-
-	return s.syncAppointmentFromQuotation(quote.ID)
 }
 
 type ConvertQuotationInput struct {
@@ -1829,6 +1898,13 @@ func (s *Service) ConvertQuotationToAppointment(quotationID string, in ConvertQu
 	}
 	if quote.AppointmentID != nil {
 		return nil, errors.New("this quotation is already linked to a booking")
+	}
+	hasSlots, err := s.quotationHasPrepaidSlots(quote.ID)
+	if err != nil {
+		return nil, err
+	}
+	if hasSlots {
+		return nil, errors.New("this invoice created prepaid examination slots; book exams from the calendar instead")
 	}
 	if in.Duration <= 0 {
 		in.Duration = 150

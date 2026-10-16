@@ -49,4 +49,6 @@ type Quotation struct {
 	BankAccounts     []bankaccounts.Details `gorm:"-" json:"bank_accounts"`
 	// BankAccountIDs is write-only input: nil = use the currency default, [] = none.
 	BankAccountIDs []uint `gorm:"-" json:"bank_account_ids,omitempty"`
+	// PrepaidSlotsMinted is true when this standalone invoice minted examination slots.
+	PrepaidSlotsMinted bool `gorm:"-" json:"prepaid_slots_minted,omitempty"`
 }

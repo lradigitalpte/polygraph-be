@@ -109,6 +109,7 @@ func main() {
 		&appointments.SubjectDocument{},
 		&appointments.DocumentShare{},
 		&appointments.Quotation{},
+		&appointments.ExamPrepaidSlot{},
 		&availability.Block{},
 		&exams.ExamType{},
 		&exams.QuestionTemplate{},
