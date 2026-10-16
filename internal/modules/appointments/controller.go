@@ -1049,10 +1049,11 @@ func (ctrl *Controller) CollectQuotationPayment(c *gin.Context) {
 
 func (ctrl *Controller) MintPrepaidSlotsForQuotation(c *gin.Context) {
 	var input struct {
-		LineQuantity *int `json:"line_quantity"`
+		LineQuantity    *int `json:"line_quantity"`
+		AlreadyConsumed int  `json:"already_consumed"`
 	}
 	_ = c.ShouldBindJSON(&input)
-	summary, err := ctrl.service.MintPrepaidSlotsForQuotation(c.Param("id"), input.LineQuantity)
+	summary, err := ctrl.service.MintPrepaidSlotsForQuotation(c.Param("id"), input.LineQuantity, input.AlreadyConsumed)
 	if err != nil {
 		status := http.StatusBadRequest
 		if err.Error() == "quotation not found" {

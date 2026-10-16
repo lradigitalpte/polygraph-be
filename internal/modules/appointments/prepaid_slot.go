@@ -96,7 +96,8 @@ func (s *Service) ensureSlotsForPaidQuotation(tx *gorm.DB, quote *Quotation) err
 // MintPrepaidSlotsForQuotation creates missing slots for a fully paid standalone invoice
 // (e.g. payment recorded before slots existed, or line_quantity was raised after payment).
 // lineQuantity, when set, updates how many examinations this invoice covers before minting.
-func (s *Service) MintPrepaidSlotsForQuotation(quotationID string, lineQuantity *int) (*PrepaidSlotSummary, error) {
+// alreadyConsumed marks exams completed before slots existed (FIFO consume after mint).
+func (s *Service) MintPrepaidSlotsForQuotation(quotationID string, lineQuantity *int, alreadyConsumed int) (*PrepaidSlotSummary, error) {
 	var quote Quotation
 	if err := s.db.First(&quote, quotationID).Error; err != nil {
 		return nil, errors.New("quotation not found")
@@ -113,11 +114,62 @@ func (s *Service) MintPrepaidSlotsForQuotation(quotationID string, lineQuantity 
 		}
 		quote.LineQuantity = *lineQuantity
 	}
+	if alreadyConsumed < 0 {
+		alreadyConsumed = 0
+	}
+	qty := slotQuantityForQuotation(&quote)
+	if alreadyConsumed > qty {
+		return nil, fmt.Errorf("already used (%d) cannot exceed examinations on invoice (%d)", alreadyConsumed, qty)
+	}
+
 	if err := s.ensureSlotsForPaidQuotation(s.db, &quote); err != nil {
 		return nil, err
 	}
+	if alreadyConsumed > 0 {
+		if err := s.markPrepaidSlotsAlreadyConsumed(s.db, quote.ID, alreadyConsumed); err != nil {
+			return nil, err
+		}
+	}
 	clientID := strconv.FormatUint(uint64(quote.ClientID), 10)
 	return s.GetClientPrepaidSlotSummary(clientID)
+}
+
+func (s *Service) markPrepaidSlotsAlreadyConsumed(tx *gorm.DB, sourceQuotationID uint, targetConsumed int) error {
+	if tx == nil {
+		tx = s.db
+	}
+	if targetConsumed <= 0 {
+		return nil
+	}
+
+	var consumed int64
+	if err := tx.Model(&ExamPrepaidSlot{}).
+		Where("source_quotation_id = ? AND status = ?", sourceQuotationID, "consumed").
+		Count(&consumed).Error; err != nil {
+		return err
+	}
+	need := targetConsumed - int(consumed)
+	if need <= 0 {
+		return nil
+	}
+
+	var available []ExamPrepaidSlot
+	if err := tx.Where("source_quotation_id = ? AND status = ?", sourceQuotationID, "available").
+		Order("created_at ASC, id ASC").
+		Limit(need).
+		Find(&available).Error; err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for i := range available {
+		if err := tx.Model(&available[i]).Updates(map[string]interface{}{
+			"status":      "consumed",
+			"consumed_at": now,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) quotationHasPrepaidSlots(quotationID uint) (bool, error) {
