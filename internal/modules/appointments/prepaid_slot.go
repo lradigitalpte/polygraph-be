@@ -108,6 +108,22 @@ func (s *Service) MintPrepaidSlotsForQuotation(quotationID string, lineQuantity 
 	if !quotationFullyPaid(&quote) {
 		return nil, errors.New("invoice must be fully paid before creating examination slots")
 	}
+
+	var existingSlots int64
+	if err := s.db.Model(&ExamPrepaidSlot{}).Where("source_quotation_id = ?", quote.ID).Count(&existingSlots).Error; err != nil {
+		return nil, err
+	}
+	if existingSlots > 0 {
+		if alreadyConsumed > 0 {
+			if err := s.markPrepaidSlotsAlreadyConsumed(s.db, quote.ID, alreadyConsumed); err != nil {
+				return nil, err
+			}
+			clientID := strconv.FormatUint(uint64(quote.ClientID), 10)
+			return s.GetClientPrepaidSlotSummary(clientID)
+		}
+		return nil, errors.New("prepaid examination slots already exist for this invoice")
+	}
+
 	if lineQuantity != nil && *lineQuantity > 0 {
 		if err := s.db.Model(&Quotation{}).Where("id = ?", quote.ID).Update("line_quantity", *lineQuantity).Error; err != nil {
 			return nil, err
