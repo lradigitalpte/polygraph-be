@@ -273,6 +273,10 @@ func BuildInvoicePDF(quote *Quotation, org InvoicePDFOrg) ([]byte, error) {
 
 	drawPaymentDetailsBox(pdf, leftX, bottomY+38, contentW, quote.BankAccounts, paymentRef)
 
+	if quotationPaidForPDF(quote) {
+		drawPaidStampOnPDF(pdf, leftX+contentW/2, 145)
+	}
+
 	pdf.SetY(280)
 	pdf.SetFont("Helvetica", "", 8)
 	pdf.SetTextColor(153, 153, 153)
@@ -600,4 +604,29 @@ func formatAmountCommas(amount float64) string {
 		wholeStr = strings.Join(parts, ",")
 	}
 	return fmt.Sprintf("%s%s.%02d", sign, wholeStr, frac)
+}
+
+func quotationPaidForPDF(quote *Quotation) bool {
+	if quote == nil {
+		return false
+	}
+	total := money.CeilWhole(quote.Amount)
+	if total <= 0 {
+		return false
+	}
+	collected := money.CeilWhole(quote.CollectedAmount)
+	return collected >= total
+}
+
+func drawPaidStampOnPDF(pdf *gofpdf.Fpdf, cx, cy float64) {
+	pdf.SetDrawColor(22, 163, 74)
+	pdf.SetTextColor(22, 163, 74)
+	pdf.SetLineWidth(0.9)
+	w, h := 52.0, 20.0
+	x := cx - w/2
+	y := cy - h/2
+	pdf.Rect(x, y, w, h, "D")
+	pdf.SetFont("Helvetica", "B", 30)
+	pdf.SetXY(x, y+4)
+	pdf.CellFormat(w, 12, "PAID", "", 0, "C", false, 0, "")
 }
