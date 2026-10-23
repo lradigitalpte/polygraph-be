@@ -706,6 +706,15 @@ func (s *Service) CollectAppointmentPayment(id string, amount float64) (*Appoint
 		return nil, err
 	}
 
+	// A linked invoice owns the money (quantity, VAT, repricing); record against it so
+	// the payment is not capped at the appointment's single-exam fee.
+	if quoteID, ok := s.linkedQuotationID(appt.ID); ok {
+		if err := s.CollectQuotationPayment(strconv.FormatUint(uint64(quoteID), 10), amount); err != nil {
+			return nil, err
+		}
+		return s.GetAppointmentByID(id)
+	}
+
 	newCollected := appt.CollectedAmount + amount
 	totalDue := appt.ExamFee
 	if totalDue <= 0 {
@@ -1102,7 +1111,40 @@ func (s *Service) UpdatePayment(id string, paymentStatus string, examFee *float6
 		updates["exam_fee"] = *examFee
 	}
 
-	return s.db.Model(&Appointment{}).Where("id = ?", id).Updates(updates).Error
+	if err := s.db.Model(&Appointment{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return err
+	}
+
+	// Marking a booking Paid settles its linked invoice's remaining balance.
+	if !strings.EqualFold(paymentStatus, "Paid") {
+		return nil
+	}
+	apptID, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return nil
+	}
+	quoteID, ok := s.linkedQuotationID(uint(apptID))
+	if !ok {
+		return nil
+	}
+	var quote Quotation
+	if err := s.db.First(&quote, quoteID).Error; err != nil {
+		return err
+	}
+	remaining := money.CeilWhole(QuotationTotalDue(&quote)) - money.CeilWhole(quote.CollectedAmount)
+	if remaining <= 0 {
+		return nil
+	}
+	return s.CollectQuotationPayment(strconv.FormatUint(uint64(quoteID), 10), remaining)
+}
+
+// linkedQuotationID returns the invoice attached to an appointment, if any.
+func (s *Service) linkedQuotationID(appointmentID uint) (uint, bool) {
+	var quote Quotation
+	if err := s.db.Select("id").Where("appointment_id = ?", appointmentID).First(&quote).Error; err != nil {
+		return 0, false
+	}
+	return quote.ID, true
 }
 
 func (s *Service) validateAppointment(app *Appointment) error {
@@ -1682,25 +1724,8 @@ func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, s
 				if err := tx.First(&appt, *quote.AppointmentID).Error; err != nil {
 					return err
 				}
-				newCollected := appt.CollectedAmount + applyAmount
-				totalDue := appt.ExamFee
-				if totalDue <= 0 {
-					totalDue = newCollected
-				}
-				if newCollected > totalDue {
-					newCollected = totalDue
-				}
-				status := "Partial"
-				if newCollected <= 0 {
-					status = "Unpaid"
-				} else if newCollected >= totalDue && totalDue > 0 {
-					status = "Paid"
-				}
-				if err := tx.Model(&appt).Updates(map[string]interface{}{
-					"collected_amount": newCollected,
-					"payment_status":   status,
-					"payment_mode":     "Card",
-				}).Error; err != nil {
+				// Appointment amounts are overwritten from the invoice below; only the mode is set here.
+				if err := tx.Model(&appt).Update("payment_mode", "Card").Error; err != nil {
 					return err
 				}
 				quoteCollected := quote.CollectedAmount + applyAmount

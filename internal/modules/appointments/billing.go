@@ -192,6 +192,11 @@ func (s *Service) backfillAppointmentBilling(appt *Appointment, typePrices map[s
 	if strings.EqualFold(strings.TrimSpace(appt.Status), "cancelled") {
 		return
 	}
+	// Once an invoice exists it owns the amounts; re-deriving them from the appointment
+	// (single-exam catalog fee, no VAT/quantity) would overwrite the invoice on every list load.
+	if _, ok := s.linkedQuotationID(appt.ID); ok {
+		return
+	}
 	rates := s.loadMoneyRates()
 	s.normalizeAppointmentMoney(appt, typePrices, rates)
 	if appt.ExamFee <= 0 && appt.CollectedAmount <= 0 {
@@ -301,15 +306,22 @@ func (s *Service) syncQuotationFromAppointment(appointmentID uint) error {
 	}
 
 	updates := map[string]interface{}{
-		"amount":           appt.ExamFee,
-		"collected_amount": appt.CollectedAmount,
-		"status":           paymentStatusToQuoteStatus(appt.PaymentStatus, appt.CollectedAmount, appt.ExamFee),
-		"currency":         billingCurrency,
+		"currency": billingCurrency,
+	}
+	// A priced invoice (subtotal/VAT/quantity set) keeps its own total.
+	if quote.SubtotalAmount <= 0 {
+		updates["amount"] = appt.ExamFee
+		quote.Amount = appt.ExamFee
 	}
 
+	// Collected only ever grows from the appointment side; payments recorded on the
+	// invoice must not be wiped by a lower appointment figure.
 	newCollected := money.CeilWhole(appt.CollectedAmount)
 	oldCollected := money.CeilWhole(quote.CollectedAmount)
+	collected := quote.CollectedAmount
 	if newCollected > oldCollected {
+		collected = appt.CollectedAmount
+		updates["collected_amount"] = collected
 		delta := newCollected - oldCollected
 		paidAt := appt.ScheduledAt.UTC()
 		if paidAt.IsZero() {
@@ -325,6 +337,7 @@ func (s *Service) syncQuotationFromAppointment(appointmentID uint) error {
 			Method:       "appointment",
 		})
 	}
+	updates["status"] = quotationPaymentStatusFromAmounts(collected, QuotationTotalDue(&quote))
 
 	return s.db.Model(&Quotation{}).Where("appointment_id = ?", appointmentID).Updates(updates).Error
 }
@@ -472,7 +485,13 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 		seenAppointments[appt.ID] = true
 		seenQuotations[quote.ID] = true
 
-		totalDue, paid := s.canonicalAppointmentAmounts(appt, typePrices, rates)
+		// Linked bookings bill from the invoice (quantity, VAT, repricing), not the appointment fee.
+		quoteCur := strings.ToUpper(strings.TrimSpace(quote.Currency))
+		if quoteCur == "" {
+			quoteCur = defaultCurrency
+		}
+		totalDue := amountInOrgCurrency(QuotationTotalDue(&quote), quoteCur, rates)
+		paid := amountInOrgCurrency(quote.CollectedAmount, quoteCur, rates)
 		balance := totalDue - paid
 		if balance < 0 {
 			balance = 0
@@ -510,7 +529,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			TotalAmount:          totalDue,
 			PaidAmount:           paid,
 			BalanceDue:           balance,
-			Status:               appt.PaymentStatus,
+			Status:               quoteStatusToPaymentStatus("", paid, totalDue),
 			PaymentMode:          appt.PaymentMode,
 			Currency:             defaultCurrency,
 			ExaminerName:         examinerNames[appt.ExaminerID],
