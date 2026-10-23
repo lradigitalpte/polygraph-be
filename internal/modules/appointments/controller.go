@@ -916,7 +916,8 @@ func (ctrl *Controller) SendQuotationEmail(c *gin.Context) {
 		return
 	}
 
-	remaining := quote.Amount - quote.CollectedAmount
+	totalDue := QuotationTotalDue(quote)
+	remaining := totalDue - quote.CollectedAmount
 	if remaining < 0 {
 		remaining = 0
 	}

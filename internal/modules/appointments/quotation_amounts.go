@@ -17,6 +17,30 @@ func QuotationHasVAT(q *Quotation) bool {
 	return q.VatRate > 0 || money.CeilWhole(q.VatAmount) > 0
 }
 
+// QuotationTotalDue returns the invoice total incl. VAT (matches dashboard and PDF).
+func QuotationTotalDue(q *Quotation) float64 {
+	if q == nil {
+		return 0
+	}
+	return computeInvoiceTotals(q).Total
+}
+
+// quotationPaymentStatusFromAmounts maps collected vs total due to invoice status.
+func quotationPaymentStatusFromAmounts(collected, totalDue float64) string {
+	collected = money.CeilWhole(collected)
+	totalDue = money.CeilWhole(totalDue)
+	if totalDue <= 0 {
+		return "Pending"
+	}
+	if collected >= totalDue {
+		return "Completed"
+	}
+	if collected > 0 {
+		return "Partial"
+	}
+	return "Pending"
+}
+
 // QuotationInvoiceAmounts derives display totals using the same rules as invoice PDFs.
 func QuotationInvoiceAmounts(q *Quotation) InvoiceAmounts {
 	t := computeInvoiceTotals(q)

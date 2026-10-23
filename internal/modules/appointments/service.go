@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -1583,6 +1584,45 @@ func (s *Service) invoicePDFOrg() InvoicePDFOrg {
 	return org
 }
 
+// reconcileQuotationPaymentFields fixes status and amount when legacy rows used amount
+// without VAT while subtotal/vat fields show the full invoice total.
+func (s *Service) reconcileQuotationPaymentFields(q *Quotation) {
+	if q == nil || q.ID == 0 {
+		return
+	}
+	totalDue := QuotationTotalDue(q)
+	if totalDue <= 0 {
+		return
+	}
+	collected := money.CeilWhole(q.CollectedAmount)
+	totalDue = money.CeilWhole(totalDue)
+
+	updates := map[string]interface{}{}
+	if math.Abs(q.Amount-totalDue) > 0.009 {
+		updates["amount"] = totalDue
+		q.Amount = totalDue
+	}
+
+	wantStatus := q.Status
+	switch {
+	case collected >= totalDue:
+		wantStatus = "Completed"
+	case collected > 0:
+		if strings.EqualFold(q.Status, "Completed") || strings.EqualFold(q.Status, "Partial") {
+			wantStatus = "Partial"
+		}
+	}
+	if wantStatus != q.Status &&
+		(strings.EqualFold(q.Status, "Completed") || strings.EqualFold(q.Status, "Partial")) {
+		updates["status"] = wantStatus
+		q.Status = wantStatus
+	}
+	if len(updates) == 0 {
+		return
+	}
+	_ = s.db.Model(&Quotation{}).Where("id = ?", q.ID).Updates(updates).Error
+}
+
 // GetQuotationByID loads a single quotation (with client) by ID string.
 func (s *Service) GetQuotationByID(id string) (*Quotation, error) {
 	var quote Quotation
@@ -1595,6 +1635,7 @@ func (s *Service) GetQuotationByID(id string) (*Quotation, error) {
 	quote.PaymentHistory = parseQuotationPaymentHistory(quote.PaymentHistoryJSON)
 	s.resolveQuotationBankAccounts(&quote, nil)
 	s.populateQuotationPrepaidFlags(&quote)
+	s.reconcileQuotationPaymentFields(&quote)
 	return &quote, nil
 }
 
@@ -1625,7 +1666,8 @@ func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, s
 			}
 		}
 
-		remaining := quote.Amount - quote.CollectedAmount
+		totalDue := QuotationTotalDue(&quote)
+		remaining := totalDue - quote.CollectedAmount
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -1662,27 +1704,27 @@ func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, s
 					return err
 				}
 				quoteCollected := quote.CollectedAmount + applyAmount
-				quoteStatus := "Partial"
-				if quoteCollected >= quote.Amount {
-					quoteCollected = quote.Amount
-					quoteStatus = "Completed"
+				if totalDue > 0 && quoteCollected > totalDue {
+					quoteCollected = totalDue
 				}
+				quoteStatus := quotationPaymentStatusFromAmounts(quoteCollected, totalDue)
 				if err := tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(map[string]interface{}{
 					"collected_amount": quoteCollected,
 					"status":           quoteStatus,
+					"amount":           money.CeilWhole(totalDue),
 				}).Error; err != nil {
 					return err
 				}
 			} else {
 				newCollected := quote.CollectedAmount + applyAmount
-				newStatus := "Partial"
-				if newCollected >= quote.Amount {
-					newCollected = quote.Amount
-					newStatus = "Completed"
+				if totalDue > 0 && newCollected > totalDue {
+					newCollected = totalDue
 				}
+				newStatus := quotationPaymentStatusFromAmounts(newCollected, totalDue)
 				if err := tx.Model(&Quotation{}).Where("id = ?", quote.ID).Updates(map[string]interface{}{
 					"collected_amount": newCollected,
 					"status":           newStatus,
+					"amount":           money.CeilWhole(totalDue),
 				}).Error; err != nil {
 					return err
 				}
@@ -1848,11 +1890,11 @@ func (s *Service) CollectQuotationPayment(id string, amount float64) error {
 			return errors.New("quotation not found")
 		}
 
+		totalDue := QuotationTotalDue(&quote)
 		newCollected := quote.CollectedAmount + amount
-		newStatus := "Partial"
-		if newCollected >= quote.Amount {
-			newCollected = quote.Amount
-			newStatus = "Completed"
+		newStatus := quotationPaymentStatusFromAmounts(newCollected, totalDue)
+		if totalDue > 0 && newCollected > totalDue {
+			newCollected = totalDue
 		}
 
 		history := appendQuotationPaymentEntry(quote.PaymentHistoryJSON, QuotationPaymentEntry{
@@ -1866,12 +1908,14 @@ func (s *Service) CollectQuotationPayment(id string, amount float64) error {
 			"collected_amount": newCollected,
 			"status":           newStatus,
 			"payment_history":  history,
+			"amount":           money.CeilWhole(totalDue),
 		}).Error; err != nil {
 			return err
 		}
 
 		quote.CollectedAmount = newCollected
 		quote.Status = newStatus
+		quote.Amount = money.CeilWhole(totalDue)
 		txSvc := &Service{db: tx, storage: s.storage}
 		if err := txSvc.ensureSlotsForPaidQuotation(tx, &quote); err != nil {
 			return err

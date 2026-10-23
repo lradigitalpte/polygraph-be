@@ -610,7 +610,7 @@ func quotationPaidForPDF(quote *Quotation) bool {
 	if quote == nil {
 		return false
 	}
-	total := money.CeilWhole(quote.Amount)
+	total := money.CeilWhole(QuotationTotalDue(quote))
 	if total <= 0 {
 		return false
 	}

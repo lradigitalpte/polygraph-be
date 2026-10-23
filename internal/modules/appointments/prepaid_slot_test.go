@@ -101,6 +101,35 @@ func TestEnsureSlotsForPaidQuotation_NoMintOnPartial(t *testing.T) {
 	require.Equal(t, int64(0), count)
 }
 
+func TestCollectQuotationPayment_UsesVATInclusiveTotal(t *testing.T) {
+	db := openPrepaidTestDB(t)
+	svc := &Service{db: db}
+	client := seedCorporateClient(t, db)
+	// Legacy row: amount field is a deposit; subtotal + VAT is the real total.
+	q := Quotation{
+		ClientID:        client.ID,
+		Code:            "900002",
+		Title:           "Bulk screening",
+		LineQuantity:    6,
+		Amount:          3087,
+		SubtotalAmount:  8820,
+		VatRate:         5,
+		VatAmount:       441,
+		CollectedAmount: 3087,
+		Status:          "Completed",
+		Currency:        "AED",
+	}
+	require.NoError(t, db.Create(&q).Error)
+
+	require.NoError(t, svc.CollectQuotationPayment(strconv.FormatUint(uint64(q.ID), 10), 6174))
+
+	var updated Quotation
+	require.NoError(t, db.First(&updated, q.ID).Error)
+	require.Equal(t, float64(9261), updated.CollectedAmount)
+	require.Equal(t, "Completed", updated.Status)
+	require.Equal(t, float64(9261), updated.Amount)
+}
+
 func TestCollectQuotationPayment_MintsSlotsWhenFullyPaid(t *testing.T) {
 	db := openPrepaidTestDB(t)
 	svc := &Service{db: db}

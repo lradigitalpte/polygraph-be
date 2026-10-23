@@ -9,6 +9,8 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"my-app/internal/money"
 )
 
 // ExamPrepaidSlot is one redeemable examination credit from a paid bulk invoice.
@@ -37,13 +39,14 @@ func isCorporateClientType(clientType string) bool {
 }
 
 func quotationFullyPaid(quote *Quotation) bool {
-	if quote == nil || quote.Amount <= 0 {
+	if quote == nil {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(quote.Status), "Completed") {
-		return true
+	totalDue := QuotationTotalDue(quote)
+	if totalDue <= 0 {
+		return false
 	}
-	return quote.CollectedAmount >= quote.Amount
+	return money.CeilWhole(quote.CollectedAmount) >= money.CeilWhole(totalDue)
 }
 
 func slotQuantityForQuotation(quote *Quotation) int {
