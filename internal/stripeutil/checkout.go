@@ -65,8 +65,8 @@ type CreateCheckoutSessionParams struct {
 	ChargeAmount  float64
 	// PassProcessingFeeToCustomer grosses up the single Checkout line item (fee kept in metadata).
 	PassProcessingFeeToCustomer bool
-	ProcessingFeePercent          float64
-	ProcessingFeeFixed            float64
+	ProcessingFeePercent        float64
+	ProcessingFeeFixed          float64
 }
 
 // CreateCheckoutSession creates a one-time Stripe Checkout Session for an invoice balance or deposit.
@@ -134,16 +134,20 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 			checkoutUnitAmount = grossCents
 		}
 	}
+	productData := &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+		Name: stripe.String(name),
+	}
+	// Stripe rejects an empty description; omit the field when the fee line has none.
+	if desc != "" {
+		productData.Description = stripe.String(desc)
+	}
 	lineItems := []*stripe.CheckoutSessionLineItemParams{
 		{
 			Quantity: stripe.Int64(1),
 			PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
-				Currency:   stripe.String(currency),
-				UnitAmount: stripe.Int64(checkoutUnitAmount),
-				ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
-					Name:        stripe.String(name),
-					Description: stripe.String(desc),
-				},
+				Currency:    stripe.String(currency),
+				UnitAmount:  stripe.Int64(checkoutUnitAmount),
+				ProductData: productData,
 			},
 		},
 	}
@@ -154,7 +158,7 @@ func CreateCheckoutSession(p CreateCheckoutSessionParams) (*CheckoutResult, erro
 		SuccessURL: stripe.String(base + "/pay/success?session_id={CHECKOUT_SESSION_ID}"),
 		CancelURL:  stripe.String(base + "/pay/cancel"),
 		LineItems:  lineItems,
-		Metadata: meta,
+		Metadata:   meta,
 		PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
 			Metadata: meta,
 		},
