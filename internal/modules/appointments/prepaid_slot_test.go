@@ -167,3 +167,79 @@ func TestRedeemPrepaidSlotForBooking_NoSlotsReturnsNil(t *testing.T) {
 	require.Nil(t, slot)
 	require.Empty(t, note)
 }
+
+func TestDeleteAppointment_ReleasesPrepaidSlotAndVoidsSessionInvoice(t *testing.T) {
+	db := openPrepaidTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Appointment{}))
+	svc := &Service{db: db}
+	client := seedCorporateClient(t, db)
+	bulk := seedStandaloneQuote(t, db, client.ID, 2, 200, 200, "Completed")
+	require.NoError(t, svc.ensureSlotsForPaidQuotation(db, &bulk))
+
+	// Simulate a booking that redeemed the first slot.
+	var slot ExamPrepaidSlot
+	require.NoError(t, db.Order("id ASC").First(&slot).Error)
+	appt := Appointment{ClientID: client.ID, PrepaidSlotID: &slot.ID, PaymentStatus: "Paid"}
+	require.NoError(t, db.Create(&appt).Error)
+	require.NoError(t, db.Model(&slot).Updates(map[string]interface{}{"status": "consumed", "appointment_id": appt.ID}).Error)
+	session := Quotation{ClientID: client.ID, AppointmentID: &appt.ID, Amount: 100, CollectedAmount: 100, Status: "Completed"}
+	require.NoError(t, db.Create(&session).Error)
+
+	require.NoError(t, svc.DeleteAppointment(strconv.FormatUint(uint64(appt.ID), 10)))
+
+	sum, err := svc.GetClientPrepaidSlotSummary(strconv.FormatUint(uint64(client.ID), 10))
+	require.NoError(t, err)
+	require.Equal(t, 2, sum.Available)
+	require.Equal(t, 0, sum.Consumed)
+
+	var sessionCount int64
+	require.NoError(t, db.Model(&Quotation{}).Where("id = ?", session.ID).Count(&sessionCount).Error)
+	require.Equal(t, int64(0), sessionCount)
+	var bulkCount int64
+	require.NoError(t, db.Model(&Quotation{}).Where("id = ?", bulk.ID).Count(&bulkCount).Error)
+	require.Equal(t, int64(1), bulkCount)
+}
+
+func TestRepairOrphanedPrepaidSlots_RestoresSlotsAndIsIdempotent(t *testing.T) {
+	db := openPrepaidTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Appointment{}))
+	svc := &Service{db: db}
+	client := seedCorporateClient(t, db)
+	bulk := seedStandaloneQuote(t, db, client.ID, 2, 200, 200, "Completed")
+	require.NoError(t, svc.ensureSlotsForPaidQuotation(db, &bulk))
+
+	var slots []ExamPrepaidSlot
+	require.NoError(t, db.Order("id ASC").Find(&slots).Error)
+
+	// Slot 0: consumed by a deleted booking (the bug). Slot 1: consumed by a live booking.
+	dead := Appointment{ClientID: client.ID, PrepaidSlotID: &slots[0].ID}
+	live := Appointment{ClientID: client.ID, PrepaidSlotID: &slots[1].ID}
+	require.NoError(t, db.Create(&dead).Error)
+	require.NoError(t, db.Create(&live).Error)
+	require.NoError(t, db.Model(&slots[0]).Updates(map[string]interface{}{"status": "consumed", "appointment_id": dead.ID}).Error)
+	require.NoError(t, db.Model(&slots[1]).Updates(map[string]interface{}{"status": "consumed", "appointment_id": live.ID}).Error)
+	deadInv := Quotation{Code: "900101", ClientID: client.ID, AppointmentID: &dead.ID, Amount: 100, CollectedAmount: 100, Status: "Completed"}
+	liveInv := Quotation{Code: "900102", ClientID: client.ID, AppointmentID: &live.ID, Amount: 100, CollectedAmount: 100, Status: "Completed"}
+	require.NoError(t, db.Create(&deadInv).Error)
+	require.NoError(t, db.Create(&liveInv).Error)
+	require.NoError(t, db.Delete(&dead).Error) // old buggy delete: soft-delete only
+
+	released, voided, err := RepairOrphanedPrepaidSlots(db)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), released)
+	require.Equal(t, int64(1), voided)
+
+	sum, err := svc.GetClientPrepaidSlotSummary(strconv.FormatUint(uint64(client.ID), 10))
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.Available)
+	require.Equal(t, 1, sum.Consumed)
+
+	var liveInvCount int64
+	require.NoError(t, db.Model(&Quotation{}).Where("id = ?", liveInv.ID).Count(&liveInvCount).Error)
+	require.Equal(t, int64(1), liveInvCount)
+
+	released, voided, err = RepairOrphanedPrepaidSlots(db)
+	require.NoError(t, err)
+	require.Zero(t, released)
+	require.Zero(t, voided)
+}

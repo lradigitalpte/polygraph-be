@@ -678,15 +678,53 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 	return &appointment, nil
 }
 
+// DeleteAppointment soft-deletes an appointment. If the booking redeemed a prepaid slot
+// the slot is returned to the client's balance and the session invoice that booking
+// auto-generated is removed too, so deleting a mistaken booking leaves no trace in billing.
 func (s *Service) DeleteAppointment(id string) error {
-	result := s.db.Delete(&Appointment{}, id)
-	if result.Error != nil {
-		return result.Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var appt Appointment
+		if err := tx.First(&appt, id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("appointment not found")
+			}
+			return err
+		}
+
+		released, err := releasePrepaidSlotForAppointment(tx, &appt)
+		if err != nil {
+			return err
+		}
+		if released {
+			// The session invoice was marked Paid only because the slot covered it;
+			// the real money lives on the bulk invoice, which is untouched.
+			if err := tx.Where("appointment_id = ?", appt.ID).Delete(&Quotation{}).Error; err != nil {
+				return err
+			}
+		}
+
+		return tx.Delete(&appt).Error
+	})
+}
+
+// releasePrepaidSlotForAppointment returns any slot consumed by the appointment to
+// "available". Reports whether a slot was released.
+func releasePrepaidSlotForAppointment(tx *gorm.DB, appt *Appointment) (bool, error) {
+	q := tx.Model(&ExamPrepaidSlot{}).Where("status = ?", "consumed")
+	if appt.PrepaidSlotID != nil {
+		q = q.Where("id = ? OR appointment_id = ?", *appt.PrepaidSlotID, appt.ID)
+	} else {
+		q = q.Where("appointment_id = ?", appt.ID)
 	}
-	if result.RowsAffected == 0 {
-		return errors.New("appointment not found")
+	res := q.Updates(map[string]interface{}{
+		"status":         "available",
+		"appointment_id": nil,
+		"consumed_at":    nil,
+	})
+	if res.Error != nil {
+		return false, res.Error
 	}
-	return nil
+	return res.RowsAffected > 0, nil
 }
 
 func (s *Service) UpdateStatus(id string, status string) error {

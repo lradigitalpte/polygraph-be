@@ -161,6 +161,14 @@ func main() {
 		}
 	}
 
+	// Return prepaid slots (and void session invoices) stranded by deleted bookings.
+	// Idempotent; a no-op once data is clean.
+	if released, voided, repairErr := appointments.RepairOrphanedPrepaidSlots(db); repairErr != nil {
+		logger.Warn("Prepaid slot repair failed", zap.Error(repairErr))
+	} else if released > 0 || voided > 0 {
+		logger.Info("Repaired orphaned prepaid slots", zap.Int64("slots_released", released), zap.Int64("invoices_voided", voided))
+	}
+
 	// Seed database with roles and permissions
 	dbseed.SeedDatabase(db, logger)
 	forms.SeedTemplates(db)
