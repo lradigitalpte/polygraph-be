@@ -1066,6 +1066,34 @@ func (ctrl *Controller) MintPrepaidSlotsForQuotation(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
+// RevokeQuotationSlot removes one unused slot from a bulk invoice and reprices it.
+func (ctrl *Controller) RevokeQuotationSlot(c *gin.Context) {
+	quote, err := ctrl.service.RevokeSlotFromQuotation(c.Param("id"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "quotation not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, quote)
+}
+
+// ApplyPrepaidSlot moves an existing booking onto the client's next free bulk-invoice slot.
+func (ctrl *Controller) ApplyPrepaidSlot(c *gin.Context) {
+	appt, err := ctrl.service.ApplyPrepaidSlotToAppointment(c.Param("id"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "appointment not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, appt)
+}
+
 func (ctrl *Controller) ConvertQuotation(c *gin.Context) {
 	var input ConvertQuotationInput
 	if err := c.ShouldBindJSON(&input); err != nil {

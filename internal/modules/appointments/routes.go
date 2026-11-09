@@ -38,6 +38,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		a.PATCH("/:id/status", permissionMiddleware("appointment:manage"), ctrl.UpdateStatus)
 		a.PATCH("/:id/payment", permissionMiddleware("appointment:manage"), ctrl.UpdatePayment)
 		a.PATCH("/:id/collect-payment", permissionMiddleware("appointment:manage"), ctrl.CollectAppointmentPayment)
+		a.POST("/:id/apply-prepaid-slot", permissionMiddleware("appointment:manage"), ctrl.ApplyPrepaidSlot)
 		a.PATCH("/:id/send-payment-reminder", permissionMiddleware("appointment:manage"), ctrl.SendAppointmentPaymentReminder)
 		a.GET("/billing/ledger", permissionMiddleware("appointment:view"), ctrl.GetBillingLedger)
 	}
@@ -66,6 +67,7 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		q.PATCH("/:id/approve", permissionMiddleware("appointment:manage"), ctrl.ApproveQuotation)
 		q.PATCH("/:id/collect-payment", permissionMiddleware("appointment:manage"), ctrl.CollectQuotationPayment)
 		q.POST("/:id/mint-prepaid-slots", permissionMiddleware("appointment:manage"), ctrl.MintPrepaidSlotsForQuotation)
+		q.POST("/:id/revoke-slot", permissionMiddleware("appointment:manage"), ctrl.RevokeQuotationSlot)
 		q.POST("/:id/convert", permissionMiddleware("appointment:create"), ctrl.ConvertQuotation)
 		q.DELETE("/:id", permissionMiddleware("payment:manage"), ctrl.DeleteQuotation)
 	}

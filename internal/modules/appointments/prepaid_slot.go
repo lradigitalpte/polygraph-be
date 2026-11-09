@@ -31,6 +31,8 @@ type PrepaidSlotSummary struct {
 	Available int `json:"available"`
 	Consumed  int `json:"consumed"`
 	Total     int `json:"total"`
+	// AwaitingPayment counts slots (used or not) whose bulk invoice is not fully paid yet.
+	AwaitingPayment int `json:"awaiting_payment"`
 }
 
 func isCorporateClientType(clientType string) bool {
@@ -61,17 +63,22 @@ func slotQuantityForQuotation(quote *Quotation) int {
 }
 
 // ensureSlotsForPaidQuotation mints prepaid slots when a standalone invoice is fully paid.
+// Corporate bulk invoices already got their slots at creation; this tops up the rest.
 func (s *Service) ensureSlotsForPaidQuotation(tx *gorm.DB, quote *Quotation) error {
+	if !quotationFullyPaid(quote) {
+		return nil
+	}
+	return s.ensureSlotsForQuotation(tx, quote)
+}
+
+// ensureSlotsForQuotation creates missing slots for a standalone (bulk) invoice so it
+// covers line_quantity examinations. Payment is not required: slots of an unpaid invoice
+// can be booked, and those bookings follow the invoice's payment status.
+func (s *Service) ensureSlotsForQuotation(tx *gorm.DB, quote *Quotation) error {
 	if tx == nil {
 		tx = s.db
 	}
-	if quote == nil || quote.ID == 0 {
-		return nil
-	}
-	if quote.AppointmentID != nil {
-		return nil
-	}
-	if !quotationFullyPaid(quote) {
+	if quote == nil || quote.ID == 0 || quote.AppointmentID != nil {
 		return nil
 	}
 
@@ -108,10 +115,6 @@ func (s *Service) MintPrepaidSlotsForQuotation(quotationID string, lineQuantity 
 	if quote.AppointmentID != nil {
 		return nil, errors.New("only standalone bulk invoices can mint examination slots")
 	}
-	if !quotationFullyPaid(&quote) {
-		return nil, errors.New("invoice must be fully paid before creating examination slots")
-	}
-
 	var existingSlots int64
 	if err := s.db.Model(&ExamPrepaidSlot{}).Where("source_quotation_id = ?", quote.ID).Count(&existingSlots).Error; err != nil {
 		return nil, err
@@ -141,7 +144,7 @@ func (s *Service) MintPrepaidSlotsForQuotation(quotationID string, lineQuantity 
 		return nil, fmt.Errorf("already used (%d) cannot exceed examinations on invoice (%d)", alreadyConsumed, qty)
 	}
 
-	if err := s.ensureSlotsForPaidQuotation(s.db, &quote); err != nil {
+	if err := s.ensureSlotsForQuotation(s.db, &quote); err != nil {
 		return nil, err
 	}
 	if alreadyConsumed > 0 {
@@ -247,6 +250,22 @@ func (s *Service) GetClientPrepaidSlotSummary(clientID string) (*PrepaidSlotSumm
 		}
 	}
 	summary.Total = summary.Available + summary.Consumed
+
+	var quotes []Quotation
+	if err := s.db.Where("id IN (?)",
+		s.db.Model(&ExamPrepaidSlot{}).Select("source_quotation_id").Where("client_id = ?", clientID)).
+		Find(&quotes).Error; err == nil {
+		for i := range quotes {
+			if quotationFullyPaid(&quotes[i]) {
+				continue
+			}
+			var n int64
+			_ = s.db.Model(&ExamPrepaidSlot{}).
+				Where("source_quotation_id = ? AND status IN ?", quotes[i].ID, []string{"available", "consumed"}).
+				Count(&n).Error
+			summary.AwaitingPayment += int(n)
+		}
+	}
 	return &summary, nil
 }
 

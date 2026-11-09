@@ -30,4 +30,6 @@ type AccountLedgerEntry struct {
 	Currency             string `json:"currency,omitempty"`
 	ExaminerName         string `json:"examiner_name,omitempty"`
 	StripePaymentLinkURL string `json:"stripe_payment_link_url,omitempty"`
+	// CoveredBy is the bulk invoice code when this exam used a prepaid slot (amounts are 0).
+	CoveredBy string `json:"covered_by,omitempty"`
 }

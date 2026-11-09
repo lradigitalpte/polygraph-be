@@ -197,6 +197,10 @@ func (s *Service) backfillAppointmentBilling(appt *Appointment, typePrices map[s
 	if _, ok := s.linkedQuotationID(appt.ID); ok {
 		return
 	}
+	// Bulk invoice owns the money for slot-backed bookings.
+	if appt.PrepaidSlotID != nil {
+		return
+	}
 	rates := s.loadMoneyRates()
 	s.normalizeAppointmentMoney(appt, typePrices, rates)
 	if appt.ExamFee <= 0 && appt.CollectedAmount <= 0 {
@@ -255,6 +259,10 @@ func quoteStatusToPaymentStatus(quoteStatus string, collected, total float64) st
 
 func (s *Service) ensureInvoiceForAppointment(appt *Appointment) error {
 	if appt == nil || appt.ID == 0 {
+		return nil
+	}
+	// Slot-backed bookings are billed on their bulk invoice, never on a session invoice.
+	if appt.PrepaidSlotID != nil || appointmentUsesPrepaidSlot(s.db, appt.ID) {
 		return nil
 	}
 
@@ -448,8 +456,29 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 	}
 
 	apptByID := make(map[uint]Appointment, len(appointments))
+	apptIDs := make([]uint, 0, len(appointments))
 	for _, appt := range appointments {
 		apptByID[appt.ID] = appt
+		apptIDs = append(apptIDs, appt.ID)
+	}
+	for _, quote := range quotations {
+		if quote.AppointmentID != nil {
+			apptIDs = append(apptIDs, *quote.AppointmentID)
+		}
+	}
+	// Exams covered by a bulk invoice: the bulk invoice row carries the money, so these
+	// rows show as covered with nothing billed (otherwise the client is billed twice).
+	coveredBy := s.slotBackedAppointmentCodes(apptIDs)
+	coverEntry := func(entry *AccountLedgerEntry, apptID uint) {
+		code, ok := coveredBy[apptID]
+		if !ok {
+			return
+		}
+		entry.TotalAmount = 0
+		entry.PaidAmount = 0
+		entry.BalanceDue = 0
+		entry.CoveredBy = code
+		entry.Status = "Covered by " + code
 	}
 
 	entries := make([]AccountLedgerEntry, 0, len(appointments)+len(quotations))
@@ -514,7 +543,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 
 		qid := quote.ID
 		aid := appt.ID
-		addEntry(AccountLedgerEntry{
+		entry := AccountLedgerEntry{
 			ID:                   quote.ID,
 			Source:               "booking",
 			Code:                 code,
@@ -534,7 +563,9 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			Currency:             defaultCurrency,
 			ExaminerName:         examinerNames[appt.ExaminerID],
 			StripePaymentLinkURL: quote.StripePaymentLinkURL,
-		})
+		}
+		coverEntry(&entry, appt.ID)
+		addEntry(entry)
 	}
 
 	for _, appt := range appointments {
@@ -555,7 +586,7 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			balance = 0
 		}
 		aid := appt.ID
-		addEntry(AccountLedgerEntry{
+		entry := AccountLedgerEntry{
 			ID:            appt.ID,
 			Source:        "session",
 			Code:          formatAppointmentCode(appt.ID),
@@ -573,7 +604,9 @@ func (s *Service) buildBillingLedger(clientID string) ([]AccountLedgerEntry, Acc
 			PaymentMode:   appt.PaymentMode,
 			Currency:      defaultCurrency,
 			ExaminerName:  examinerNames[appt.ExaminerID],
-		})
+		}
+		coverEntry(&entry, appt.ID)
+		addEntry(entry)
 	}
 
 	for _, quote := range quotations {

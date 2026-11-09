@@ -210,9 +210,14 @@ func (s *Service) CreateAppointment(app *Appointment) error {
 				if slot != nil {
 					slotToConsume = slot
 					app.PrepaidSlotID = &slot.ID
-					app.PaymentStatus = "Paid"
-					app.PaymentMode = "Prepaid package"
-					app.CollectedAmount = app.ExamFee
+					// Billed through the bulk invoice: paid only once that invoice is paid.
+					bulk := slot.SourceQuotation
+					if bulk.ID == 0 {
+						if err := tx.First(&bulk, slot.SourceQuotationID).Error; err != nil {
+							return err
+						}
+					}
+					app.PaymentStatus, app.CollectedAmount, app.PaymentMode = slotBookingPayment(&bulk, app.ExamFee)
 					if strings.TrimSpace(note) != "" {
 						if strings.TrimSpace(app.Notes) != "" {
 							app.Notes = strings.TrimSpace(app.Notes) + "\n\n" + note
@@ -237,12 +242,11 @@ func (s *Service) CreateAppointment(app *Appointment) error {
 			}).Error; err != nil {
 				return err
 			}
+			// No session invoice: the bulk invoice is the only bill for this exam.
+			return nil
 		}
 
-		if err := txSvc.ensureInvoiceForAppointment(app); err != nil {
-			return err
-		}
-		return txSvc.applyPrepaidSlotInvoiceNote(app)
+		return txSvc.ensureInvoiceForAppointment(app)
 	})
 }
 
@@ -658,6 +662,11 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 	if err := s.db.Model(&appointment).Updates(safe).Error; err != nil {
 		return nil, err
 	}
+	if st, ok := safe["status"].(string); ok && isCancelledStatus(st) {
+		if err := releaseSlotForCancelledAppointment(s.db, appointment.ID); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.db.Preload("Client").First(&appointment, id).Error; err != nil {
 		return nil, err
 	}
@@ -728,7 +737,20 @@ func releasePrepaidSlotForAppointment(tx *gorm.DB, appt *Appointment) (bool, err
 }
 
 func (s *Service) UpdateStatus(id string, status string) error {
-	return s.db.Model(&Appointment{}).Where("id = ?", id).Update("status", status).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var appt Appointment
+		if err := tx.First(&appt, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Appointment{}).Where("id = ?", appt.ID).Update("status", status).Error; err != nil {
+			return err
+		}
+		// A cancelled exam gives its slot back to the bulk invoice.
+		if isCancelledStatus(status) {
+			return releaseSlotForCancelledAppointment(tx, appt.ID)
+		}
+		return nil
+	})
 }
 
 func (s *Service) CollectAppointmentPayment(id string, amount float64) (*Appointment, error) {
@@ -742,6 +764,9 @@ func (s *Service) CollectAppointmentPayment(id string, amount float64) (*Appoint
 			return nil, errors.New("appointment not found")
 		}
 		return nil, err
+	}
+	if appt.PrepaidSlotID != nil {
+		return nil, errors.New("this exam is covered by a bulk invoice; record the payment on that invoice")
 	}
 
 	// A linked invoice owns the money (quantity, VAT, repricing); record against it so
@@ -1138,6 +1163,9 @@ func (s *Service) UpdatePayment(id string, paymentStatus string, examFee *float6
 	if paymentStatus == "" {
 		return errors.New("payment_status is required")
 	}
+	if apptID, err := strconv.ParseUint(id, 10, 64); err == nil && appointmentUsesPrepaidSlot(s.db, uint(apptID)) {
+		return errors.New("this exam is covered by a bulk invoice; its payment status follows that invoice")
+	}
 
 	updates := map[string]interface{}{
 		"payment_status": paymentStatus,
@@ -1480,6 +1508,14 @@ func (s *Service) CreateQuotation(input *Quotation) error {
 		}
 	}
 
+	// Corporate bulk invoice: its examination slots exist from day one, so staff book
+	// against it instead of creating separate (double-billed) session invoices.
+	if isCorporateBulkQuote(s.db, input) {
+		if err := s.ensureSlotsForQuotation(s.db, input); err != nil {
+			return err
+		}
+	}
+
 	if err := s.db.Preload("Client").First(input, input.ID).Error; err != nil {
 		return err
 	}
@@ -1553,7 +1589,24 @@ func (s *Service) UpdateQuotationPricing(id string, updates map[string]interface
 		updates[key] = money.CeilWhole(amount)
 	}
 
-	if err := s.db.Model(&Quotation{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Quotation{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return err
+		}
+		var fresh Quotation
+		if err := tx.First(&fresh, id).Error; err != nil {
+			return err
+		}
+		txSvc := &Service{db: tx, storage: s.storage}
+		if _, ok := updates["line_quantity"]; ok {
+			if err := txSvc.reconcileSlotCountForQuotation(tx, &fresh); err != nil {
+				return err
+			}
+		}
+		// A new total can change whether the bulk invoice counts as paid.
+		return txSvc.syncSlotBookingsFromBulkQuote(tx, fresh.ID)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.GetQuotationByID(id)
@@ -1833,7 +1886,7 @@ func (s *Service) ApplyStripeCheckoutPayment(quotationID uint, amount float64, s
 		if quote.AppointmentID != nil {
 			return txSvc.syncAppointmentFromQuotation(quote.ID)
 		}
-		return nil
+		return txSvc.syncSlotBookingsFromBulkQuote(tx, quote.ID)
 	})
 }
 
@@ -1983,6 +2036,9 @@ func (s *Service) CollectQuotationPayment(id string, amount float64) error {
 		if err := txSvc.ensureSlotsForPaidQuotation(tx, &quote); err != nil {
 			return err
 		}
+		if err := txSvc.syncSlotBookingsFromBulkQuote(tx, quote.ID); err != nil {
+			return err
+		}
 		return txSvc.syncAppointmentFromQuotation(quote.ID)
 	})
 }
@@ -2060,14 +2116,18 @@ func (s *Service) ConvertQuotationToAppointment(quotationID string, in ConvertQu
 // DeleteQuotation removes a quotation/invoice. The linked appointment (if any) is
 // left intact — only the billing record is removed.
 func (s *Service) DeleteQuotation(id string) error {
-	result := s.db.Delete(&Quotation{}, id)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return errors.New("quotation not found")
-	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var quote Quotation
+		if err := tx.First(&quote, id).Error; err != nil {
+			return errors.New("quotation not found")
+		}
+		if quote.AppointmentID == nil {
+			if err := guardBulkQuoteDelete(tx, quote.ID); err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&quote).Error
+	})
 }
 
 func (s *Service) BulkEditPrices(targets []struct {

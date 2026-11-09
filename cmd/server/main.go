@@ -169,6 +169,13 @@ func main() {
 		logger.Info("Repaired orphaned prepaid slots", zap.Int64("slots_released", released), zap.Int64("invoices_voided", voided))
 	}
 
+	// One-off: Pioneervision (client 38) double billing. No-op once applied.
+	if applied, repairErr := appointments.RepairPioneervisionDoubleBilling(db); repairErr != nil {
+		logger.Warn("Pioneervision billing repair failed", zap.Error(repairErr))
+	} else if applied {
+		logger.Info("Repaired Pioneervision double billing: 6 exams moved onto bulk invoices 009319/009332")
+	}
+
 	// Seed database with roles and permissions
 	dbseed.SeedDatabase(db, logger)
 	forms.SeedTemplates(db)

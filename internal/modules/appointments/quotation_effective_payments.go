@@ -15,6 +15,11 @@ func QuotationEffectivePayments(db *gorm.DB, q *Quotation) []QuotationPaymentEnt
 	if q == nil {
 		return nil
 	}
+	// Legacy session invoice of an exam paid from a bulk invoice: the money is already
+	// reported on the bulk invoice, so counting it here would double sales and VAT.
+	if db != nil && q.AppointmentID != nil && appointmentUsesPrepaidSlot(db, *q.AppointmentID) {
+		return nil
+	}
 	entries := parseQuotationPaymentHistory(q.PaymentHistoryJSON)
 	if len(entries) > 0 {
 		out := make([]QuotationPaymentEntry, len(entries))
