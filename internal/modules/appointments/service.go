@@ -663,7 +663,7 @@ func (s *Service) UpdateAppointment(id string, updates map[string]interface{}) (
 		return nil, err
 	}
 	if st, ok := safe["status"].(string); ok && isCancelledStatus(st) {
-		if err := releaseSlotForCancelledAppointment(s.db, appointment.ID); err != nil {
+		if err := releaseSlotOnCancelUnlessCharged(s.db, appointment.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -736,6 +736,8 @@ func releasePrepaidSlotForAppointment(tx *gorm.DB, appt *Appointment) (bool, err
 	return res.RowsAffected > 0, nil
 }
 
+// UpdateStatus changes a booking's status. Cancelling a slot exam returns the slot,
+// unless the client's agreement counts cancellations as used.
 func (s *Service) UpdateStatus(id string, status string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var appt Appointment
@@ -745,9 +747,8 @@ func (s *Service) UpdateStatus(id string, status string) error {
 		if err := tx.Model(&Appointment{}).Where("id = ?", appt.ID).Update("status", status).Error; err != nil {
 			return err
 		}
-		// A cancelled exam gives its slot back to the bulk invoice.
 		if isCancelledStatus(status) {
-			return releaseSlotForCancelledAppointment(tx, appt.ID)
+			return releaseSlotOnCancelUnlessCharged(tx, appt.ID)
 		}
 		return nil
 	})

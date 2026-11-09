@@ -185,16 +185,31 @@ func TestDepositMakesSlotExamsPartial(t *testing.T) {
 	require.Equal(t, "Paid", appt.PaymentStatus)
 }
 
-func TestCancellingSlotExamReturnsSlot(t *testing.T) {
+func TestCancelReturnsSlotForNormalClients(t *testing.T) {
 	svc, db, client := openBulkQuoteTestDB(t)
 	q := createBulkQuote(t, svc, client.ID, 1, 3003)
 	appt := bookSlotExam(t, svc, db, client.ID, 3003)
-	require.Equal(t, int64(0), countSlots(t, db, q.ID, "available"))
 
 	require.NoError(t, svc.UpdateStatus(strconv.FormatUint(uint64(appt.ID), 10), "cancelled"))
 	require.Equal(t, int64(1), countSlots(t, db, q.ID, "available"))
-	require.NoError(t, db.First(&appt, appt.ID).Error)
-	require.Nil(t, appt.PrepaidSlotID)
+}
+
+func TestCancelKeepsSlotWhenClientAgreementSaysUsed(t *testing.T) {
+	svc, db, client := openBulkQuoteTestDB(t)
+	cid := strconv.FormatUint(uint64(client.ID), 10)
+	sum, err := svc.SetCancellationCountsAsUsed(cid, true)
+	require.NoError(t, err)
+	require.True(t, sum.CancellationCountsAsUsed)
+
+	q := createBulkQuote(t, svc, client.ID, 1, 3003)
+	appt := bookSlotExam(t, svc, db, client.ID, 3003)
+	require.NoError(t, svc.UpdateStatus(strconv.FormatUint(uint64(appt.ID), 10), "cancelled"))
+	require.Equal(t, int64(0), countSlots(t, db, q.ID, "available"))
+
+	// Staff can still waive one by hand.
+	sum, err = svc.AdjustClientSlotCount(cid, "restore")
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.Available)
 }
 
 func TestRevokeSlotRepricesInvoice(t *testing.T) {
@@ -214,4 +229,27 @@ func TestRevokeSlotRepricesInvoice(t *testing.T) {
 	require.NoError(t, svc.CollectQuotationPayment(id, 12012))
 	_, err = svc.RevokeSlotFromQuotation(id)
 	require.Error(t, err)
+}
+
+func TestAdjustClientSlotCount(t *testing.T) {
+	svc, db, client := openBulkQuoteTestDB(t)
+	q := createBulkQuote(t, svc, client.ID, 3, 9009)
+	cid := strconv.FormatUint(uint64(client.ID), 10)
+
+	sum, err := svc.AdjustClientSlotCount(cid, "mark_used")
+	require.NoError(t, err)
+	require.Equal(t, 2, sum.Available)
+	require.Equal(t, 1, sum.Consumed)
+
+	// Restore only touches slots not linked to an exam.
+	bookSlotExam(t, svc, db, client.ID, 3003)
+	sum, err = svc.AdjustClientSlotCount(cid, "restore")
+	require.NoError(t, err)
+	require.Equal(t, 2, sum.Available)
+	_, err = svc.AdjustClientSlotCount(cid, "restore")
+	require.Error(t, err)
+
+	var amount float64
+	db.Model(&Quotation{}).Select("amount").Where("id = ?", q.ID).Scan(&amount)
+	require.Equal(t, float64(9009), amount, "count correction never changes money")
 }

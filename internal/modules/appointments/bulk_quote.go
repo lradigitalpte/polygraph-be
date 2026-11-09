@@ -130,6 +130,36 @@ func releaseSlotForCancelledAppointment(tx *gorm.DB, appointmentID uint) error {
 	}).Error
 }
 
+// releaseSlotOnCancelUnlessCharged returns a cancelled exam's slot, except for clients
+// whose agreement counts a cancellation as used.
+func releaseSlotOnCancelUnlessCharged(tx *gorm.DB, appointmentID uint) error {
+	var appt Appointment
+	if err := tx.Select("id", "client_id", "prepaid_slot_id").First(&appt, appointmentID).Error; err != nil {
+		return err
+	}
+	if appt.PrepaidSlotID == nil {
+		return nil
+	}
+	var client Client
+	if err := tx.Select("id", "cancellation_counts_as_used").First(&client, appt.ClientID).Error; err == nil &&
+		client.CancellationCountsAsUsed {
+		return nil
+	}
+	return releaseSlotForCancelledAppointment(tx, appt.ID)
+}
+
+// SetCancellationCountsAsUsed sets a client's cancellation policy for bulk-invoice slots.
+func (s *Service) SetCancellationCountsAsUsed(clientID string, value bool) (*PrepaidSlotSummary, error) {
+	if _, err := s.GetClientByID(clientID); err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(&Client{}).Where("id = ?", clientID).
+		Update("cancellation_counts_as_used", value).Error; err != nil {
+		return nil, err
+	}
+	return s.GetClientPrepaidSlotSummary(clientID)
+}
+
 // quotationHasRecordedPayment reports real money (card or manual entry) on an invoice,
 // as opposed to an amount that was only marked paid at booking time.
 func quotationHasRecordedPayment(q *Quotation) bool {
@@ -331,6 +361,52 @@ func (s *Service) ApplyPrepaidSlotToAppointment(appointmentID string) (*Appointm
 		return nil, err
 	}
 	return &out, nil
+}
+
+// AdjustClientSlotCount is a count-only correction (no money changes):
+// "mark_used" marks the client's oldest free slot as used without linking an exam;
+// "restore" frees the most recent slot that was marked used without an exam.
+func (s *Service) AdjustClientSlotCount(clientID string, action string) (*PrepaidSlotSummary, error) {
+	if _, err := s.GetClientByID(clientID); err != nil {
+		return nil, err
+	}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		switch action {
+		case "mark_used":
+			var slot ExamPrepaidSlot
+			if err := tx.Where("client_id = ? AND status = ?", clientID, "available").
+				Order("created_at ASC, id ASC").First(&slot).Error; err != nil {
+				return errors.New("no free slot to mark as used")
+			}
+			return tx.Model(&ExamPrepaidSlot{}).Where("id = ?", slot.ID).Updates(map[string]interface{}{
+				"status":      "consumed",
+				"consumed_at": time.Now().UTC(),
+			}).Error
+		case "restore":
+			// Only slots not tied to a real exam: marked used by hand, or held by a
+			// cancelled exam (cancellations count as used unless staff waive it here).
+			var slot ExamPrepaidSlot
+			if err := tx.Where("client_id = ? AND status = ?", clientID, "consumed").
+				Where("appointment_id IS NULL OR appointment_id IN (?)",
+					tx.Model(&Appointment{}).Select("id").Where("status IN ?", []string{"cancelled", "canceled"})).
+				Order("consumed_at DESC, id DESC").First(&slot).Error; err != nil {
+				return errors.New("no slot to restore: every used slot belongs to an exam that is not cancelled")
+			}
+			if slot.AppointmentID != nil {
+				return releaseSlotForCancelledAppointment(tx, *slot.AppointmentID)
+			}
+			return tx.Model(&ExamPrepaidSlot{}).Where("id = ?", slot.ID).Updates(map[string]interface{}{
+				"status":      "available",
+				"consumed_at": nil,
+			}).Error
+		default:
+			return errors.New("action must be mark_used or restore")
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetClientPrepaidSlotSummary(clientID)
 }
 
 // slotBackedAppointmentCodes maps each appointment that used a prepaid slot to the code

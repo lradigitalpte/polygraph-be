@@ -17,6 +17,8 @@ func RegisterRoutes(router *gin.RouterGroup, ctrl *Controller, permissionMiddlew
 		c.GET("/:id/account", permissionMiddleware("client:manage"), ctrl.GetClientAccount)
 		c.GET("/:id/prepaid-slots", permissionMiddleware("client:manage"), ctrl.GetClientPrepaidSlots)
 		c.GET("/:id/prepaid-slots/summary", permissionMiddleware("client:manage"), ctrl.GetClientPrepaidSlotSummary)
+		c.POST("/:id/prepaid-slots/adjust", permissionMiddleware("appointment:manage"), ctrl.AdjustClientSlotCount)
+		c.PATCH("/:id/cancellation-policy", permissionMiddleware("client:manage"), ctrl.SetCancellationPolicy)
 		// Write endpoints — client:manage.
 		c.POST("", permissionMiddleware("client:manage"), ctrl.CreateClient)
 		c.PATCH("/:id", permissionMiddleware("client:manage"), ctrl.UpdateClient)

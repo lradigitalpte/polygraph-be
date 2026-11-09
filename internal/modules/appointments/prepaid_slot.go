@@ -33,6 +33,8 @@ type PrepaidSlotSummary struct {
 	Total     int `json:"total"`
 	// AwaitingPayment counts slots (used or not) whose bulk invoice is not fully paid yet.
 	AwaitingPayment int `json:"awaiting_payment"`
+	// CancellationCountsAsUsed mirrors the client's policy (cancelled exams keep their slot).
+	CancellationCountsAsUsed bool `json:"cancellation_counts_as_used"`
 }
 
 func isCorporateClientType(clientType string) bool {
@@ -250,6 +252,10 @@ func (s *Service) GetClientPrepaidSlotSummary(clientID string) (*PrepaidSlotSumm
 		}
 	}
 	summary.Total = summary.Available + summary.Consumed
+	var policy Client
+	if err := s.db.Select("id", "cancellation_counts_as_used").First(&policy, clientID).Error; err == nil {
+		summary.CancellationCountsAsUsed = policy.CancellationCountsAsUsed
+	}
 
 	var quotes []Quotation
 	if err := s.db.Where("id IN (?)",

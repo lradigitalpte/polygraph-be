@@ -32,6 +32,9 @@ type Client struct {
 	ReportVerdictWording      string         `gorm:"size:20;default:'plain'" json:"report_verdict_wording"` // plain, forensic
 	DefaultReportTemplateID   *uint          `gorm:"index" json:"default_report_template_id,omitempty"`
 	Notes                     string         `gorm:"type:text" json:"notes"`
+	// CancellationCountsAsUsed: per this client's agreement, a cancelled exam keeps its
+	// bulk-invoice slot. Off (default): cancelling returns the slot.
+	CancellationCountsAsUsed bool `gorm:"default:false" json:"cancellation_counts_as_used"`
 }
 
 // Appointment represents a scheduled polygraph session

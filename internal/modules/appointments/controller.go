@@ -1066,6 +1066,37 @@ func (ctrl *Controller) MintPrepaidSlotsForQuotation(c *gin.Context) {
 	c.JSON(http.StatusOK, summary)
 }
 
+// AdjustClientSlotCount corrects a client's free slot count without changing money.
+func (ctrl *Controller) AdjustClientSlotCount(c *gin.Context) {
+	var input struct {
+		Action string `json:"action"`
+	}
+	_ = c.ShouldBindJSON(&input)
+	summary, err := ctrl.service.AdjustClientSlotCount(c.Param("id"), input.Action)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+// SetCancellationPolicy sets whether this client's cancelled exams keep their slot.
+func (ctrl *Controller) SetCancellationPolicy(c *gin.Context) {
+	var input struct {
+		CountsAsUsed bool `json:"cancellation_counts_as_used"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	summary, err := ctrl.service.SetCancellationCountsAsUsed(c.Param("id"), input.CountsAsUsed)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
 // RevokeQuotationSlot removes one unused slot from a bulk invoice and reprices it.
 func (ctrl *Controller) RevokeQuotationSlot(c *gin.Context) {
 	quote, err := ctrl.service.RevokeSlotFromQuotation(c.Param("id"))
