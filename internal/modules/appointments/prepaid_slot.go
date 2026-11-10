@@ -117,6 +117,11 @@ func (s *Service) MintPrepaidSlotsForQuotation(quotationID string, lineQuantity 
 	if quote.AppointmentID != nil {
 		return nil, errors.New("only standalone bulk invoices can mint examination slots")
 	}
+	// Corporate bulk invoices get slots before payment (e.g. ones created before that
+	// rule existed). Anyone else still has to pay first.
+	if !quotationFullyPaid(&quote) && !isCorporateBulkQuote(s.db, &quote) {
+		return nil, errors.New("invoice must be fully paid before creating examination slots")
+	}
 	var existingSlots int64
 	if err := s.db.Model(&ExamPrepaidSlot{}).Where("source_quotation_id = ?", quote.ID).Count(&existingSlots).Error; err != nil {
 		return nil, err

@@ -253,3 +253,22 @@ func TestAdjustClientSlotCount(t *testing.T) {
 	db.Model(&Quotation{}).Select("amount").Where("id = ?", q.ID).Scan(&amount)
 	require.Equal(t, float64(9009), amount, "count correction never changes money")
 }
+
+func TestMintSlotsForOldUnpaidCorporateQuote(t *testing.T) {
+	svc, db, client := openBulkQuoteTestDB(t)
+	// Created before slots were minted at creation: insert directly, no slots.
+	old := Quotation{ClientID: client.ID, Code: "009333", Title: "Old", LineQuantity: 30, Amount: 46305, Status: "Pending", Currency: "AED"}
+	require.NoError(t, db.Create(&old).Error)
+
+	sum, err := svc.MintPrepaidSlotsForQuotation(strconv.FormatUint(uint64(old.ID), 10), nil, 0)
+	require.NoError(t, err)
+	require.Equal(t, 30, sum.Available)
+	require.Equal(t, 30, sum.AwaitingPayment)
+
+	person := Client{Name: "Walk-in", ClientType: "Individual", Email: "w@test.example"}
+	require.NoError(t, db.Create(&person).Error)
+	unpaid := Quotation{ClientID: person.ID, Code: "009400", Title: "Walk-in", LineQuantity: 1, Amount: 3003, Status: "Pending", Currency: "AED"}
+	require.NoError(t, db.Create(&unpaid).Error)
+	_, err = svc.MintPrepaidSlotsForQuotation(strconv.FormatUint(uint64(unpaid.ID), 10), nil, 0)
+	require.Error(t, err, "individuals still pay before slots")
+}
