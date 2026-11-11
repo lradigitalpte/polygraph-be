@@ -176,6 +176,14 @@ func main() {
 		logger.Info("Repaired Pioneervision double billing: 6 exams moved onto bulk invoices 009319/009332")
 	}
 
+	// One-off: invoice 009331 (client 41) covers 2 exams but was linked to one booking.
+	// Turns it into a bulk invoice with 2 slots. No-op once applied.
+	if applied, repairErr := appointments.RepairAlfrdousBulkInvoice009331(db); repairErr != nil {
+		logger.Warn("Invoice 009331 slot repair failed", zap.Error(repairErr))
+	} else if applied {
+		logger.Info("Repaired invoice 009331: now a bulk invoice with 2 slots (booking 307 uses slot 1)")
+	}
+
 	// Seed database with roles and permissions
 	dbseed.SeedDatabase(db, logger)
 	forms.SeedTemplates(db)

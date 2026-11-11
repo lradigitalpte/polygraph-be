@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+
+	"my-app/internal/money"
 )
 
 // RepairOrphanedPrepaidSlots fixes data left behind by the old DeleteAppointment, which
@@ -125,6 +127,90 @@ func RepairPioneervisionDoubleBilling(db *gorm.DB) (bool, error) {
 			if err := tx.Delete(&Quotation{}, f.SessionQuote).Error; err != nil {
 				return err
 			}
+		}
+		applied = true
+		return nil
+	})
+	return applied, err
+}
+
+// RepairAlfrdousBulkInvoice009331 is a one-off data fix (2026-11-11) for client 41.
+// Invoice 009331 covers 2 examinations (line_quantity 2, fully paid AED 9,240) but was
+// turned into booking 307's own invoice before the ConvertQuotationToAppointment guard
+// existed, so it never created slots and the second exam could not be booked against it.
+// This makes 009331 a standalone bulk invoice with 2 slots: slot 1 used by booking 307,
+// slot 2 free for the second exam. Booking 307's fee becomes its share (AED 4,620).
+//
+// It runs only if every row is still exactly as audited, so it is a no-op after the
+// first successful run (or if staff already fixed it by hand). Returns true if applied.
+func RepairAlfrdousBulkInvoice009331(db *gorm.DB) (bool, error) {
+	const (
+		clientID      = 41
+		quoteID       = 331
+		appointmentID = 307
+		bulkCode      = "009331"
+		slotTotal     = 2
+	)
+	applied := false
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var q Quotation
+		if err := tx.Where("id = ? AND client_id = ? AND code = ? AND appointment_id = ? AND line_quantity = ?",
+			quoteID, clientID, bulkCode, appointmentID, slotTotal).First(&q).Error; err != nil {
+			return nil // already repaired or changed by hand: do nothing
+		}
+		var slots int64
+		if err := tx.Unscoped().Model(&ExamPrepaidSlot{}).Where("source_quotation_id = ?", quoteID).Count(&slots).Error; err != nil {
+			return err
+		}
+		if slots > 0 {
+			return nil
+		}
+		var appt Appointment
+		if err := tx.Where("id = ? AND client_id = ? AND prepaid_slot_id IS NULL", appointmentID, clientID).
+			First(&appt).Error; err != nil {
+			return nil
+		}
+
+		// Detach the invoice from the booking: it is now the client's bulk invoice.
+		if err := tx.Model(&Quotation{}).Where("id = ?", quoteID).Update("appointment_id", nil).Error; err != nil {
+			return err
+		}
+		q.AppointmentID = nil
+
+		consumedAt := appt.ScheduledAt
+		used := ExamPrepaidSlot{
+			ClientID:          clientID,
+			SourceQuotationID: quoteID,
+			Status:            "consumed",
+			AppointmentID:     &appt.ID,
+			ConsumedAt:        &consumedAt,
+		}
+		free := ExamPrepaidSlot{ClientID: clientID, SourceQuotationID: quoteID, Status: "available"}
+		if err := tx.Create(&used).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&free).Error; err != nil {
+			return err
+		}
+
+		fee := money.Round2(QuotationTotalDue(&q) / slotTotal)
+		status, collected, mode := slotBookingPayment(&q, fee)
+		note := prepaidSlotNote(q, 1)
+		notes := strings.TrimSpace(appt.Notes)
+		if notes != "" {
+			notes += "\n\n" + note
+		} else {
+			notes = note
+		}
+		if err := tx.Model(&Appointment{}).Where("id = ?", appointmentID).Updates(map[string]interface{}{
+			"prepaid_slot_id":  used.ID,
+			"exam_fee":         fee,
+			"payment_status":   status,
+			"collected_amount": collected,
+			"payment_mode":     mode,
+			"notes":            notes,
+		}).Error; err != nil {
+			return err
 		}
 		applied = true
 		return nil
